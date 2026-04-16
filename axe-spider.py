@@ -37,7 +37,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
-from collections import OrderedDict
+from collections import deque
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 
@@ -50,6 +50,15 @@ from selenium.common.exceptions import (
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AXE_JS_PATH = os.path.join(SCRIPT_DIR, 'axe.min.js')
 DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, 'axe-spider.yaml')
+
+# File extensions that are never HTML — skip without loading in browser
+SKIP_EXTENSIONS = frozenset((
+    '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.svg', '.ico',
+    '.css', '.js', '.zip', '.tar', '.gz', '.mp4', '.mp3',
+    '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.xml', '.json', '.rss', '.atom', '.woff', '.woff2',
+    '.ttf', '.eot', '.bmp', '.webp', '.csv',
+))
 
 # axe-core version (read from the bundled file header on first use)
 AXE_VERSION = None
@@ -339,15 +348,9 @@ def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None,
     parsed = urlparse(url)
     path = parsed.path
 
-    # Skip non-HTML resources
-    skip_exts = (
-        '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.svg', '.ico',
-        '.css', '.js', '.zip', '.tar', '.gz', '.mp4', '.mp3',
-        '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-        '.xml', '.json', '.rss', '.atom', '.woff', '.woff2',
-        '.ttf', '.eot', '.bmp', '.webp', '.csv',
-    )
-    if any(path.lower().endswith(ext) for ext in skip_exts):
+    # Skip non-HTML resources (O(1) lookup via frozenset)
+    ext = os.path.splitext(path.lower())[1]
+    if ext in SKIP_EXTENSIONS:
         return False
 
     if include_paths:
@@ -414,7 +417,7 @@ def run_axe(driver, axe_source, tags=None, rules=None):
     """Inject axe-core and run analysis on the current page."""
     try:
         driver.execute_script(axe_source)
-    except (WebDriverException, Exception) as e:
+    except Exception as e:
         return {'error': 'axe-core injection failed: {}'.format(str(e)[:100])}
 
     run_opts = {}
@@ -434,7 +437,7 @@ def run_axe(driver, axe_source, tags=None, rules=None):
     """
     try:
         results = driver.execute_async_script(script, run_opts)
-    except (TimeoutException, WebDriverException, Exception) as e:
+    except Exception as e:
         return {'error': 'axe.run() failed: {}'.format(str(e)[:100])}
     if results is None:
         return {'error': 'axe.run() returned null (page may have navigated away)'}
@@ -493,10 +496,10 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
 
     visited = set()
     if seed_urls:
-        queue = [normalize_url(u) for u in seed_urls]
+        queue = deque(normalize_url(u) for u in seed_urls)
         no_crawl = True  # Don't follow links when using a URL list
     else:
-        queue = [normalize_url(start_url)]
+        queue = deque([normalize_url(start_url)])
         no_crawl = False
     page_count = 0
 
@@ -506,8 +509,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     # at the end or on each incremental flush.
     jsonl_path = (json_path + 'l') if json_path else None
     if jsonl_path:
-        # Truncate — fresh scan
-        open(jsonl_path, 'w').close()
+        with open(jsonl_path, 'w'):
+            pass  # truncate for fresh scan
 
     if not quiet:
         print("Starting axe-core {} accessibility scan...".format(get_axe_version()))
@@ -567,11 +570,12 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             print('  (flush failed: {})'.format(str(e)[:80]))
 
     # SIGTERM/SIGINT handler: flush partial results, quit driver, exit
-    _interrupted = {'flag': False}
+    interrupted = False
     def _on_signal(signum, frame):
-        if _interrupted['flag']:
+        nonlocal interrupted
+        if interrupted:
             return
-        _interrupted['flag'] = True
+        interrupted = True
         print('\n!! Signal {} — flushing {} pages...'.format(signum, page_count))
         _flush(reason='signal {}'.format(signum))
         try:
@@ -583,8 +587,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     signal.signal(signal.SIGINT, _on_signal)
 
     try:
-        while queue and page_count < max_pages and not _interrupted['flag']:
-            url = queue.pop(0)
+        while queue and page_count < max_pages and not interrupted:
+            url = queue.popleft()
             if url in visited:
                 continue
             visited.add(url)
