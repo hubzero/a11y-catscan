@@ -1066,6 +1066,9 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     # SIGTERM/SIGINT handler: flush partial results and exit
     interrupted = False
 
+    # Signal handler sets the interrupted flag.  Each scan mode checks this
+    # flag and breaks out of its loop.  We don't call sys.exit() here because
+    # asyncio.run() swallows SystemExit and leaves browsers orphaned.
     def _on_signal(signum, frame):
         nonlocal interrupted
         if interrupted:
@@ -1073,7 +1076,6 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         interrupted = True
         print('\n!! Signal {} — flushing {} pages...'.format(signum, page_count))
         _flush(reason='signal {}'.format(signum))
-        sys.exit(128 + signum)
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
@@ -1400,12 +1402,15 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                 and page_count % save_every == 0):
                             _flush()
 
-                    await browser.close()
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
 
             try:
                 asyncio.run(_pw_sliding_window())
-            except KeyboardInterrupt:
-                pass
+            except (KeyboardInterrupt, SystemExit, Exception):
+                _cleanup_browsers()
 
         else:
             # --- Selenium parallel: thread pool with separate browsers ---
