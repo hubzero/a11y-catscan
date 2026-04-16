@@ -275,8 +275,16 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
 
                 current = driver.current_url
                 if not is_same_origin(current, base_url):
-                    print("  REDIRECTED to {}, skipping".format(current[:80]))
-                    page_count -= 1  # Don't count external redirects
+                    if verbose:
+                        print("  REDIRECTED to {}, skipping".format(current[:80]))
+                    page_count -= 1
+                    continue
+
+                # Skip empty/broken pages (e.g. auth walls that render blank)
+                page_html = driver.page_source or ''
+                if len(page_html) < 100:
+                    print("  Empty page ({} bytes), skipping".format(len(page_html)))
+                    page_count -= 1
                     continue
 
                 results = run_axe(driver, axe_source, tags)
