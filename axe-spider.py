@@ -397,7 +397,7 @@ def run_axe(driver, axe_source, tags=None, rules=None):
 
 def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                    include_paths=None, exclude_paths=None, exclude_regex=None,
-                   exclude_query=None, verbose=False, config=None,
+                   exclude_query=None, verbose=False, quiet=False, config=None,
                    json_path=None, html_path=None, save_every=25,
                    level_label=None, allowlist=None, seed_urls=None):
     """Crawl the site starting from start_url and scan each page with axe-core.
@@ -463,15 +463,16 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         # Truncate — fresh scan
         open(jsonl_path, 'w').close()
 
-    print("Starting axe-core {} accessibility scan...".format(get_axe_version()))
-    print("  Start URL: {}".format(start_url))
-    print("  Level: {} ({})".format(level_label, ', '.join(tags)))
-    print("  Max pages: {}".format(max_pages))
-    if page_wait > 1:
-        print("  Page wait: {}s".format(page_wait))
-    if json_path and save_every:
-        print("  Incremental save every {} pages".format(save_every))
-    print()
+    if not quiet:
+        print("Starting axe-core {} accessibility scan...".format(get_axe_version()))
+        print("  Start URL: {}".format(start_url))
+        print("  Level: {} ({})".format(level_label, ', '.join(tags)))
+        print("  Max pages: {}".format(max_pages))
+        if page_wait > 1:
+            print("  Page wait: {}s".format(page_wait))
+        if json_path and save_every:
+            print("  Incremental save every {} pages".format(save_every))
+        print()
 
     def _write_page(url, page_data):
         """Append one page's results to the JSONL file."""
@@ -537,13 +538,14 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 continue
 
             page_count += 1
-            print("[{}/{}] Scanning: {}".format(page_count, max_pages, url))
+            if not quiet:
+                print("[{}/{}] Scanning: {}".format(page_count, max_pages, url))
 
             # Lightweight HTTP status check — error pages get scanned but
             # their links aren't followed (they typically render site nav
             # chrome that would fan out the crawl from a dead URL).
             status = http_status(url)
-            if status and status >= 400:
+            if status and status >= 400 and not quiet:
                 print("  HTTP {} (error page — scan but skip links)".format(status))
 
             try:
@@ -596,8 +598,9 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
 
                 v_count = sum(len(v.get('nodes', [])) for v in violations)
                 i_count = sum(len(v.get('nodes', [])) for v in incomplete)
-                print("  Violations: {} ({} issues), Incomplete: {} ({} nodes), Passes: {}".format(
-                    len(violations), v_count, len(incomplete), i_count, len(passes)))
+                if not quiet:
+                    print("  Violations: {} ({} issues), Incomplete: {} ({} nodes), Passes: {}".format(
+                        len(violations), v_count, len(incomplete), i_count, len(passes)))
 
                 page_data = {
                     'url': url,
@@ -1214,6 +1217,8 @@ def main():
                         help='Generate a compact markdown summary optimized for LLM context')
     parser.add_argument('--summary-json', action='store_true',
                         help='Print a one-line JSON summary to stdout (machine-parseable)')
+    parser.add_argument('-q', '--quiet', action='store_true',
+                        help='Suppress per-page output, only show final summary')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Verbose output')
 
@@ -1302,6 +1307,7 @@ def main():
         exclude_regex=exclude_regex,
         exclude_query=exclude_query,
         verbose=args.verbose,
+        quiet=args.quiet,
         config=config,
         json_path=json_path,
         html_path=html_path,
