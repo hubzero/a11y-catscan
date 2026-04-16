@@ -57,6 +57,140 @@ WCAG_LEVELS = {
 }
 DEFAULT_LEVEL = 'wcag21aa'
 
+# WCAG success criteria names (subset — covers all criteria axe-core tests)
+WCAG_SC_NAMES = {
+    '1.1.1': 'Non-text Content',
+    '1.2.1': 'Audio-only and Video-only',
+    '1.2.2': 'Captions (Prerecorded)',
+    '1.2.3': 'Audio Description or Media Alternative',
+    '1.2.5': 'Audio Description (Prerecorded)',
+    '1.3.1': 'Info and Relationships',
+    '1.3.2': 'Meaningful Sequence',
+    '1.3.3': 'Sensory Characteristics',
+    '1.3.4': 'Orientation',
+    '1.3.5': 'Identify Input Purpose',
+    '1.4.1': 'Use of Color',
+    '1.4.2': 'Audio Control',
+    '1.4.3': 'Contrast (Minimum)',
+    '1.4.4': 'Resize Text',
+    '1.4.5': 'Images of Text',
+    '1.4.6': 'Contrast (Enhanced)',
+    '1.4.10': 'Reflow',
+    '1.4.11': 'Non-text Contrast',
+    '1.4.12': 'Text Spacing',
+    '1.4.13': 'Content on Hover or Focus',
+    '2.1.1': 'Keyboard',
+    '2.1.2': 'No Keyboard Trap',
+    '2.1.4': 'Character Key Shortcuts',
+    '2.2.1': 'Timing Adjustable',
+    '2.2.2': 'Pause, Stop, Hide',
+    '2.3.1': 'Three Flashes or Below Threshold',
+    '2.4.1': 'Bypass Blocks',
+    '2.4.2': 'Page Titled',
+    '2.4.3': 'Focus Order',
+    '2.4.4': 'Link Purpose (In Context)',
+    '2.4.5': 'Multiple Ways',
+    '2.4.6': 'Headings and Labels',
+    '2.4.7': 'Focus Visible',
+    '2.5.1': 'Pointer Gestures',
+    '2.5.2': 'Pointer Cancellation',
+    '2.5.3': 'Label in Name',
+    '2.5.4': 'Motion Actuation',
+    '3.1.1': 'Language of Page',
+    '3.1.2': 'Language of Parts',
+    '3.2.1': 'On Focus',
+    '3.2.2': 'On Input',
+    '3.3.1': 'Error Identification',
+    '3.3.2': 'Labels or Instructions',
+    '3.3.3': 'Error Suggestion',
+    '3.3.4': 'Error Prevention (Legal, Financial, Data)',
+    '4.1.1': 'Parsing',
+    '4.1.2': 'Name, Role, Value',
+    '4.1.3': 'Status Messages',
+}
+
+
+def _parse_wcag_sc(tags):
+    """Extract WCAG success criteria numbers from axe-core tags.
+
+    Tags like 'wcag111' -> '1.1.1', 'wcag143' -> '1.4.3',
+    'wcag2a' / 'wcag21aa' (level tags) are ignored.
+    """
+    criteria = set()
+    for tag in tags:
+        # Match wcag + 3-4 digits (SC reference, not level)
+        m = re.match(r'^wcag(\d)(\d)(\d+)$', tag)
+        if m:
+            sc = '{}.{}.{}'.format(m.group(1), m.group(2), m.group(3))
+            criteria.add(sc)
+    return criteria
+
+
+def load_allowlist(path):
+    """Load an allowlist file that suppresses known-acceptable incompletes.
+
+    Format (YAML):
+        - rule: color-contrast
+          reason: axe-core limitation on scroll-snap flex layouts
+        - rule: color-contrast
+          url: /groups/mmsc/usage
+          reason: Google Charts SVG
+        - rule: aria-allowed-attr
+          target: "#main-nav"
+
+    Returns a list of dicts with keys: rule, url (optional), target (optional).
+    """
+    if not path or not os.path.exists(path):
+        return []
+    entries = []
+    try:
+        import yaml
+        with open(path) as f:
+            data = yaml.safe_load(f) or []
+        if isinstance(data, list):
+            entries = data
+    except ImportError:
+        # Simple fallback parser for list-of-dicts
+        with open(path) as f:
+            current = {}
+            for line in f:
+                line = line.rstrip()
+                stripped = line.lstrip()
+                if not stripped or stripped.startswith('#'):
+                    continue
+                if stripped.startswith('- '):
+                    if current:
+                        entries.append(current)
+                    current = {}
+                    stripped = stripped[2:]
+                if ':' in stripped:
+                    key, _, val = stripped.partition(':')
+                    current[key.strip()] = val.strip()
+            if current:
+                entries.append(current)
+    return entries
+
+
+def _matches_allowlist(rule_id, url, nodes, allowlist):
+    """Check if a result matches any allowlist entry.
+
+    Returns True if the result should be suppressed.
+    """
+    for entry in allowlist:
+        if entry.get('rule') != rule_id:
+            continue
+        # If entry specifies a URL pattern, check it
+        entry_url = entry.get('url', '')
+        if entry_url and entry_url not in url:
+            continue
+        # If entry specifies a target selector, check nodes
+        entry_target = entry.get('target', '')
+        if entry_target:
+            if not any(entry_target in str(n.get('target', '')) for n in nodes):
+                continue
+        return True
+    return False
+
 
 def load_config(config_path=None):
     """Load site configuration from YAML file.
@@ -262,7 +396,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
                    include_paths=None, exclude_paths=None, exclude_regex=None,
                    exclude_query=None, verbose=False, config=None,
                    json_path=None, html_path=None, save_every=25,
-                   level_label=None):
+                   level_label=None, allowlist=None):
     """Crawl the site starting from start_url and scan each page with axe-core.
 
     If json_path is provided, results are flushed to disk every `save_every`
@@ -319,7 +453,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
             os.replace(tmp, json_path)
             if html_path:
                 try:
-                    generate_html_report(all_results, html_path, start_url, level_label or 'WCAG')
+                    generate_html_report(all_results, html_path, start_url,
+                                         level_label or 'WCAG', allowlist=allowlist)
                 except Exception as e:
                     print('  (html flush failed: {})'.format(str(e)[:80]))
             if reason:
@@ -446,23 +581,35 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
     return all_results
 
 
-def generate_html_report(all_results, output_path, start_url, level_label='WCAG 2.1 Level AA'):
+def generate_html_report(all_results, output_path, start_url,
+                         level_label='WCAG 2.1 Level AA', allowlist=None):
     """Generate an HTML report from scan results."""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     axe_ver = get_axe_version()
+    allowlist = allowlist or []
 
     total_pages = len(all_results)
     total_violations = 0
     total_violation_nodes = 0
     total_incomplete_nodes = 0
+    total_suppressed = 0
     impact_counts = {'critical': 0, 'serious': 0, 'moderate': 0, 'minor': 0}
     rule_summary = {}
     incomplete_summary = {}
 
+    # WCAG criteria tracking: {sc -> {'violations': n, 'incomplete': n, 'passes': n}}
+    wcag_criteria = {}
+
+    def _track_wcag(tags, category, count=1):
+        for sc in _parse_wcag_sc(tags):
+            if sc not in wcag_criteria:
+                wcag_criteria[sc] = {'violations': 0, 'incomplete': 0, 'passes': 0}
+            wcag_criteria[sc][category] += count
+
     for url, data in all_results.items():
         for v in data.get('violations', []):
-            total_violations += 1
             nodes = v.get('nodes', [])
+            total_violations += 1
             total_violation_nodes += len(nodes)
             impact = v.get('impact', 'unknown')
             if impact in impact_counts:
@@ -480,11 +627,16 @@ def generate_html_report(all_results, output_path, start_url, level_label='WCAG 
                 }
             rule_summary[rule_id]['count'] += len(nodes)
             rule_summary[rule_id]['pages'].append(url)
+            _track_wcag(v.get('tags', []), 'violations', len(nodes))
 
         for v in data.get('incomplete', []):
             nodes = v.get('nodes', [])
-            total_incomplete_nodes += len(nodes)
             rule_id = v.get('id', 'unknown')
+            # Apply allowlist suppression
+            if _matches_allowlist(rule_id, url, nodes, allowlist):
+                total_suppressed += len(nodes)
+                continue
+            total_incomplete_nodes += len(nodes)
             if rule_id not in incomplete_summary:
                 incomplete_summary[rule_id] = {
                     'help': v.get('help', ''),
@@ -495,6 +647,10 @@ def generate_html_report(all_results, output_path, start_url, level_label='WCAG 
                 }
             incomplete_summary[rule_id]['count'] += len(nodes)
             incomplete_summary[rule_id]['pages'].append(url)
+            _track_wcag(v.get('tags', []), 'incomplete', len(nodes))
+
+        for v in data.get('passes', []):
+            _track_wcag(v.get('tags', []), 'passes')
 
     sorted_rules = sorted(rule_summary.items(), key=lambda x: x[1]['count'], reverse=True)
     sorted_incomplete = sorted(incomplete_summary.items(), key=lambda x: x[1]['count'], reverse=True)
@@ -578,6 +734,10 @@ def generate_html_report(all_results, output_path, start_url, level_label='WCAG 
     html_parts.append(
         '<div class="summary-card"><div class="number">{}</div>'
         '<div class="label">Needs Review</div></div>'.format(total_incomplete_nodes))
+    if total_suppressed:
+        html_parts.append(
+            '<div class="summary-card"><div class="number" style="color:#888">{}</div>'
+            '<div class="label">Suppressed (allowlist)</div></div>'.format(total_suppressed))
     html_parts.append('</div>')
 
     html_parts.append('<h2>Impact Breakdown</h2>')
@@ -591,6 +751,35 @@ def generate_html_report(all_results, output_path, start_url, level_label='WCAG 
                 imp=impact, color=impact_colors[impact],
                 cnt=cnt, imp_cap=impact.capitalize()))
     html_parts.append('</div>')
+
+    # WCAG criteria summary
+    if wcag_criteria:
+        sorted_sc = sorted(wcag_criteria.items(), key=lambda x: x[0])
+        html_parts.append('<h2>WCAG Success Criteria</h2>')
+        html_parts.append('<table><tr><th>Criterion</th><th>Name</th>'
+                          '<th style="color:#d32f2f">Violations</th>'
+                          '<th style="color:#e65100">Incomplete</th>'
+                          '<th style="color:#2e7d32">Passes</th>'
+                          '<th>Status</th></tr>')
+        for sc, counts in sorted_sc:
+            name = WCAG_SC_NAMES.get(sc, '')
+            v = counts['violations']
+            i = counts['incomplete']
+            p = counts['passes']
+            if v > 0:
+                status = '<span class="badge badge-critical">FAIL</span>'
+            elif i > 0:
+                status = '<span class="badge badge-serious">REVIEW</span>'
+            else:
+                status = '<span style="color:#2e7d32;font-weight:bold">PASS</span>'
+            html_parts.append(
+                '<tr><td>{sc}</td><td>{name}</td>'
+                '<td>{v}</td><td>{i}</td><td>{p}</td>'
+                '<td>{status}</td></tr>'.format(
+                    sc=_esc(sc), name=_esc(name),
+                    v=v or '', i=i or '', p=p or '',
+                    status=status))
+        html_parts.append('</table>')
 
     if sorted_rules:
         html_parts.append('<h2>Violation Summary by Rule</h2>')
@@ -657,9 +846,12 @@ def generate_html_report(all_results, output_path, start_url, level_label='WCAG 
             html_parts.append(_render_nodes_html(v.get('nodes', []), limit=20))
             html_parts.append('</div>')
 
-        if incomplete:
+        # Filter allowlisted incompletes from per-page view
+        shown_incomplete = [v for v in incomplete
+                           if not _matches_allowlist(v.get('id', ''), url, v.get('nodes', []), allowlist)]
+        if shown_incomplete:
             html_parts.append('<h4 style="margin-top:1em;color:#e65100;">Incomplete (needs manual review)</h4>')
-            for v in incomplete:
+            for v in shown_incomplete:
                 html_parts.append('<div class="rule-card">')
                 html_parts.append(
                     '<strong><a href="{}">{}</a></strong>'.format(
@@ -753,6 +945,8 @@ def main():
                         help='Output file basename (default: axe-spider-YYYY-MM-DD-HHMMSS)')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: from config or current directory)')
+    parser.add_argument('--allowlist', default=None,
+                        help='YAML file of known-acceptable incompletes to suppress')
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')
@@ -809,6 +1003,12 @@ def main():
     output_dir = args.output_dir or config.get('output_dir', os.getcwd())
     os.makedirs(output_dir, exist_ok=True)
 
+    # Load allowlist
+    allowlist_path = args.allowlist or config.get('allowlist')
+    allowlist = load_allowlist(allowlist_path) if allowlist_path else []
+    if allowlist:
+        print("Allowlist: {} entries from {}".format(len(allowlist), allowlist_path))
+
     html_path = os.path.join(output_dir, basename + '.html')
     json_path = os.path.join(output_dir, basename + '.json')
 
@@ -827,6 +1027,7 @@ def main():
         html_path=html_path,
         save_every=save_every,
         level_label=level_label,
+        allowlist=allowlist,
     )
 
     # Final reports already flushed by crawl_and_scan

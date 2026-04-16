@@ -1,0 +1,19 @@
+# axe-spider allowlist — known-acceptable incompletes to suppress
+#
+# Each entry matches by rule ID. Optionally narrow by URL substring
+# and/or CSS target selector. Matching incompletes are hidden from
+# the report and counted as "Suppressed".
+#
+# After running a scan, review the incompletes, and add entries here
+# for results you've verified are not real issues.
+
+# Example: axe-core can't compute contrast in scroll-snap flex layouts
+# - rule: color-contrast
+#   url: /
+#   reason: Homepage scroll-snap flex cards — axe grid limitation
+
+# Example: suppress all imgNode incompletes from Google Charts SVGs
+# - rule: color-contrast
+#   url: /usage
+#   target: text
+#   reason: Google Charts SVG — third-party generated
