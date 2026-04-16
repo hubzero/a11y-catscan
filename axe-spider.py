@@ -978,6 +978,144 @@ def _render_nodes_html(nodes, limit=20, snippet_max=500):
     return '\n'.join(parts)
 
 
+def generate_llm_report(jsonl_path, output_path, start_url,
+                           level_label='WCAG 2.1 Level AA', allowlist=None):
+    """Generate a token-efficient markdown summary optimized for LLMs.
+
+    Instead of dumping raw JSON (100K+ tokens for a large scan), this
+    produces a compact report (~2-5K tokens) with:
+    - Context and instructions for the LLM
+    - Violations grouped by rule with deduplicated examples
+    - Incompletes grouped by messageKey
+    - Affected page lists (URLs only, no repeated node data)
+    """
+    allowlist = allowlist or []
+    axe_ver = get_axe_version()
+
+    # Aggregate: {rule_id -> {info, pages, example_nodes}}
+    violations_by_rule = {}
+    incompletes_by_key = {}
+    total_pages = 0
+    pages_with_violations = set()
+    pages_with_incompletes = set()
+    suppressed_count = 0
+
+    for url, data in _iter_jsonl(jsonl_path):
+        total_pages += 1
+        path = urlparse(url).path
+
+        for v in data.get('violations', []):
+            rule_id = v.get('id', 'unknown')
+            nodes = v.get('nodes', [])
+            pages_with_violations.add(path)
+            if rule_id not in violations_by_rule:
+                violations_by_rule[rule_id] = {
+                    'help': v.get('help', ''),
+                    'helpUrl': v.get('helpUrl', ''),
+                    'impact': v.get('impact', ''),
+                    'tags': v.get('tags', []),
+                    'count': 0,
+                    'pages': [],
+                    'examples': [],
+                }
+            info = violations_by_rule[rule_id]
+            info['count'] += len(nodes)
+            if path not in info['pages']:
+                info['pages'].append(path)
+            # Keep up to 3 unique example HTML snippets
+            for node in nodes:
+                snippet = node.get('html', '')[:200]
+                if snippet and len(info['examples']) < 3 and snippet not in info['examples']:
+                    info['examples'].append(snippet)
+
+        for v in data.get('incomplete', []):
+            nodes = v.get('nodes', [])
+            rule_id = v.get('id', 'unknown')
+            if _matches_allowlist(rule_id, url, nodes, allowlist):
+                suppressed_count += len(nodes)
+                continue
+            pages_with_incompletes.add(path)
+            for node in nodes:
+                for check in node.get('any', []):
+                    d = check.get('data', {})
+                    mk = d.get('messageKey', '') if isinstance(d, dict) else ''
+                    if mk not in incompletes_by_key:
+                        incompletes_by_key[mk] = {'count': 0, 'pages': set(), 'examples': []}
+                    info = incompletes_by_key[mk]
+                    info['count'] += 1
+                    info['pages'].add(path)
+                    snippet = node.get('html', '')[:150]
+                    if snippet and len(info['examples']) < 2 and snippet not in info['examples']:
+                        info['examples'].append(snippet)
+
+    # Build markdown
+    lines = []
+    lines.append('# axe-spider accessibility scan results\n')
+    lines.append('Site: {}  '.format(start_url))
+    lines.append('Level: {}  '.format(level_label))
+    lines.append('axe-core: {}  '.format(axe_ver))
+    lines.append('Pages scanned: {}  '.format(total_pages))
+    lines.append('Scan date: {}\n'.format(datetime.now().strftime('%Y-%m-%d')))
+
+    lines.append('## Instructions\n')
+    lines.append('This is a WCAG accessibility scan summary. When investigating:')
+    lines.append('- Each violation needs a code fix — find the template/CSS that generates the flagged HTML')
+    lines.append('- Incompletes are items axe-core could not auto-verify (usually contrast on gradients/images)')
+    lines.append('- The "examples" show representative HTML — the same pattern repeats across listed pages')
+    lines.append('- Check the helpUrl for each rule to understand what WCAG requires')
+    lines.append('- Focus on violations first (failures), then incompletes (may be false positives)\n')
+
+    # Violations
+    if violations_by_rule:
+        lines.append('## Violations ({} issues on {} pages)\n'.format(
+            sum(v['count'] for v in violations_by_rule.values()),
+            len(pages_with_violations)))
+        for rule_id, info in sorted(violations_by_rule.items(),
+                                     key=lambda x: x[1]['count'], reverse=True):
+            wcag_scs = ', '.join(sorted(_parse_wcag_sc(info['tags'])))
+            lines.append('### {} ({}, {} issues)'.format(rule_id, info['impact'], info['count']))
+            lines.append('{}'.format(info['help']))
+            if wcag_scs:
+                lines.append('WCAG: {}'.format(wcag_scs))
+            lines.append('Pages: {}'.format(', '.join(info['pages'][:10])))
+            if len(info['pages']) > 10:
+                lines.append('  ... and {} more'.format(len(info['pages']) - 10))
+            lines.append('Examples:')
+            for ex in info['examples']:
+                lines.append('```html\n{}\n```'.format(ex))
+            lines.append('')
+    else:
+        lines.append('## Violations: NONE\n')
+
+    # Incompletes
+    if incompletes_by_key:
+        total_inc = sum(v['count'] for v in incompletes_by_key.values())
+        lines.append('## Incompletes ({} nodes on {} pages)\n'.format(
+            total_inc, len(pages_with_incompletes)))
+        for mk, info in sorted(incompletes_by_key.items(),
+                                key=lambda x: x[1]['count'], reverse=True):
+            lines.append('### {} — {} nodes, {} pages'.format(
+                mk or '(unknown)', info['count'], len(info['pages'])))
+            pages_list = sorted(info['pages'])
+            lines.append('Pages: {}'.format(', '.join(pages_list[:10])))
+            if len(pages_list) > 10:
+                lines.append('  ... and {} more'.format(len(pages_list) - 10))
+            if info['examples']:
+                lines.append('Example:')
+                lines.append('```html\n{}\n```'.format(info['examples'][0]))
+            lines.append('')
+    else:
+        lines.append('## Incompletes: NONE\n')
+
+    if suppressed_count:
+        lines.append('## Suppressed (allowlist): {} nodes\n'.format(suppressed_count))
+
+    report = '\n'.join(lines)
+    with open(output_path, 'w') as f:
+        f.write(report)
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Scan a website for WCAG accessibility violations using axe-core.',
@@ -1010,6 +1148,8 @@ def main():
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')
+    parser.add_argument('--llm', action='store_true',
+                        help='Generate a compact markdown summary optimized for LLM context')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Verbose output')
 
@@ -1093,6 +1233,12 @@ def main():
     # Final reports already flushed by crawl_and_scan
     print("\nJSON report: {}".format(json_path))
     print("HTML report: {}".format(html_path))
+
+    if args.llm and jsonl_path and os.path.exists(jsonl_path):
+        llm_path = os.path.join(output_dir, basename + '.md')
+        generate_llm_report(jsonl_path, llm_path, url,
+                            level_label=level_label, allowlist=allowlist)
+        print("LLM report: {}".format(llm_path))
 
     # Summary (stream from JSONL, no memory spike)
     total_violations = 0
