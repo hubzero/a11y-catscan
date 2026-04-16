@@ -1,0 +1,40 @@
+# axe-spider site configuration
+#
+# Copy to axe-spider.yaml and edit for your site.
+# Command-line arguments override config values.
+
+# Default starting URL
+url: https://example.com/
+
+# WCAG level: wcag2a, wcag2aa, wcag21aa, wcag22aa, etc.
+level: wcag21aa
+
+# Maximum pages to crawl
+max_pages: 50
+
+# Output directory for reports
+output_dir: ./reports
+
+# Seconds to wait after page load for JS to settle
+page_wait: 1
+
+# Flush reports every N pages (partial results survive kills)
+save_every: 25
+
+# Paths to exclude from scanning
+exclude_paths:
+  - /login
+  - /api
+  - /administrator
+
+# Regex patterns to exclude (e.g. paths behind HTTP basic auth)
+# exclude_regex:
+#   - ^/internal/[^/]+/(admin|settings|logs)(/|$)
+
+# Query substrings that produce non-HTML output
+# exclude_query:
+#   - action=overview
+
+# Chromium / ChromeDriver paths
+chromium_path: /usr/bin/chromium-browser
+chromedriver_path: /usr/bin/chromedriver
