@@ -1418,8 +1418,11 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             _make_staggered(url, i * stagger, wid)())
                         pending[task] = url
 
-                    # Sliding window: as each finishes, print and
-                    # start the next
+                    # Sliding window: as each finishes, print result,
+                    # feed discovered links, and fill all empty worker
+                    # slots (not just one).  This is important because
+                    # with a single seed URL, only W1 gets the first
+                    # page; W2/W3 can't start until W1 discovers links.
                     while pending and not interrupted:
                         done, _ = await asyncio.wait(
                             pending.keys(),
@@ -1453,26 +1456,32 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                                 i_count))
                                     ss = (', '.join(parts)
                                           if parts else 'clean')
-                                    # Show worker ID when parallel
                                     print("[{}/{}] W{} {} — {}".format(
                                         str(page_count).rjust(pw_w),
                                         max_pages, wid, url, ss))
                                 _write_page(url, page_data)
+
+                                # Feed discovered links into the queue
                                 for link in new_links:
                                     if (link not in visited
                                             and link not in queue):
                                         queue.append(link)
-
-                                # Refill: reuse this worker's ID
-                                if page_count < max_pages:
-                                    next_url = _next_url()
-                                    if next_url:
-                                        t = asyncio.create_task(
-                                            _scan(next_url,
-                                                  worker_id=wid))
-                                        pending[t] = next_url
                             else:
                                 page_count -= 1
+
+                        # Fill ALL empty worker slots (not just one).
+                        # After the first page finishes and feeds links,
+                        # this is what gets W2/W3 their first pages.
+                        # Worker IDs cycle 1..num_workers.
+                        while (len(pending) < num_workers
+                               and page_count + len(pending) < max_pages):
+                            next_url = _next_url()
+                            if next_url is None:
+                                break
+                            wid = (len(pending) % num_workers) + 1
+                            t = asyncio.create_task(
+                                _scan(next_url, worker_id=wid))
+                            pending[t] = next_url
 
                         if (json_path and save_every
                                 and page_count % save_every == 0):
