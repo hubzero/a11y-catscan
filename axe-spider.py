@@ -371,12 +371,15 @@ def extract_links(driver, base_url):
         return []
 
 
-def run_axe(driver, axe_source, tags=None):
+def run_axe(driver, axe_source, tags=None, rules=None):
     """Inject axe-core and run analysis on the current page."""
     driver.execute_script(axe_source)
 
     run_opts = {}
-    if tags:
+    if rules:
+        # Run only specific rules by ID
+        run_opts['runOnly'] = {'type': 'rule', 'values': rules}
+    elif tags:
         run_opts['runOnly'] = {'type': 'tag', 'values': tags}
 
     script = """
@@ -392,7 +395,7 @@ def run_axe(driver, axe_source, tags=None):
     return results
 
 
-def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
+def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                    include_paths=None, exclude_paths=None, exclude_regex=None,
                    exclude_query=None, verbose=False, config=None,
                    json_path=None, html_path=None, save_every=25,
@@ -576,7 +579,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
                     page_count -= 1
                     continue
 
-                results = run_axe(driver, axe_source, tags)
+                results = run_axe(driver, axe_source, tags, rules)
 
                 if 'error' in results:
                     print("  ERROR: {}".format(results['error']))
@@ -1196,6 +1199,8 @@ def main():
                              'Partial results survive if the scan is killed.')
     parser.add_argument('--diff', default=None, metavar='PREV.jsonl',
                         help='Compare against a previous scan JSONL and show what changed')
+    parser.add_argument('--rule', action='append', default=None,
+                        help='Only run specific axe rules (repeatable, e.g. --rule color-contrast)')
     parser.add_argument('--url-only', action='store_true',
                         help='Scan only the given URL (no crawling). Fast single-page verify.')
     parser.add_argument('--llm', action='store_true',
@@ -1271,6 +1276,7 @@ def main():
         url,
         max_pages=max_pages,
         tags=tags,
+        rules=args.rule,
         level=args.level,
         include_paths=include_paths,
         exclude_paths=exclude_paths,
