@@ -662,11 +662,31 @@ def create_browser(config=None):
         return SeleniumBrowser(config)
 
 
+# Parameters to strip from URLs during normalization.  These are common
+# pagination, sorting, and redirect params that produce the same page
+# template with different data.  Stripping them deduplicates the crawl
+# frontier so we don't scan /resources?sort=date AND /resources?sort=title.
+_strip_params = set()
+
+
 def normalize_url(url):
-    """Normalize URL for deduplication: strip fragment, trailing slash on path."""
+    """Normalize URL for deduplication.
+
+    Strips fragment, trailing slash, and any query parameters listed in
+    _strip_params (configured from strip_query_params in the YAML config).
+    """
     parsed = urlparse(url)
     path = parsed.path.rstrip('/') or '/'
-    return urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, parsed.query, ''))
+
+    # Filter out stripped query parameters
+    query = parsed.query
+    if query and _strip_params:
+        from urllib.parse import parse_qs, urlencode
+        params = parse_qs(query, keep_blank_values=True)
+        filtered = {k: v for k, v in params.items() if k not in _strip_params}
+        query = urlencode(filtered, doseq=True) if filtered else ''
+
+    return urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, query, ''))
 
 
 def is_same_origin(url, base_url):
@@ -692,7 +712,7 @@ def load_robots_txt(base_url):
 
 
 def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None,
-                exclude_query=None, robots_parser=None):
+                robots_parser=None):
     """Decide whether a URL should be scanned based on all filter rules.
 
     Checks (in order): same-origin, file extension, include/exclude paths,
@@ -725,10 +745,6 @@ def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None,
     query = parsed.query
     if 'action=pdf' in query:
         return False
-    if exclude_query:
-        for q in exclude_query:
-            if q in query:
-                return False
 
     # Respect robots.txt if a parser was provided (--ignore-robots disables this).
     # We check both the exact URL and with a trailing slash, because our URL
@@ -835,7 +851,7 @@ def run_axe(driver, axe_source, tags=None, rules=None):
 
 def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                    include_paths=None, exclude_paths=None, exclude_regex=None,
-                   exclude_query=None, verbose=False, quiet=False, config=None,
+                   verbose=False, quiet=False, config=None,
                    json_path=None, html_path=None, save_every=25,
                    level_label=None, allowlist=None, seed_urls=None,
                    robots_parser=None):
@@ -1101,7 +1117,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 visited.add(url)
 
                 if not should_scan(url, base_url, include_paths, exclude_paths,
-                                   exclude_regex, exclude_query, robots_parser):
+                                   exclude_regex, robots_parser):
                     continue
 
                 page_count += 1
@@ -2337,8 +2353,13 @@ OTHER NOTES
                 print("WARNING: invalid exclude_regex '{}': {}".format(pattern, e),
                       file=sys.stderr)
 
-    # Resolve exclude query strings from config (e.g. action=overview)
-    exclude_query = config.get('exclude_query') if not args.no_default_excludes else None
+    # Query parameters to strip from URLs during normalization.
+    # This deduplicates sort/filter/pagination variants of the same page.
+    global _strip_params
+    strip_list = config.get('strip_query_params', [])
+    if isinstance(strip_list, str):
+        strip_list = [s.strip() for s in strip_list.split(',')]
+    _strip_params = set(strip_list)
 
     # Resolve output
     save_every = args.save_every or _safe_int(config.get('save_every', 25), 25)
@@ -2382,7 +2403,6 @@ OTHER NOTES
         include_paths=include_paths,
         exclude_paths=exclude_paths,
         exclude_regex=exclude_regex,
-        exclude_query=exclude_query,
         verbose=args.verbose,
         quiet=args.quiet,
         config=config,

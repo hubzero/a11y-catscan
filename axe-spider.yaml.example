@@ -36,9 +36,14 @@ exclude_paths:
 # exclude_regex:
 #   - ^/internal/[^/]+/(admin|settings|logs)(/|$)
 
-# Query substrings that produce non-HTML output
-# exclude_query:
-#   - action=overview
+# Query parameters to strip from URLs during normalization.
+# Deduplicates sort/filter/pagination variants of the same page.
+# strip_query_params:
+#   - sort
+#   - limit
+#   - start
+#   - page
+#   - return
 
 # Process priority — keep the scan from starving production services.
 # niceness: 0-19 (higher = lower priority, default 10; 0 to disable)
