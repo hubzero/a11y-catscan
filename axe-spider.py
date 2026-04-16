@@ -29,10 +29,12 @@ Exit codes: 0 = no violations, 1 = violations found.
 """
 
 import argparse
+import atexit
 import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -363,6 +365,55 @@ def load_axe_source():
         return f.read()
 
 
+# Track all browser processes we launch so we can kill them on exit.
+# This prevents orphaned chromium/chromedriver processes when the script
+# crashes, is killed, or exits abnormally.
+_browser_pids = set()
+_browser_pids_lock = threading.Lock()
+
+
+def _register_browser_pid(pid):
+    """Register a browser process PID for cleanup on exit."""
+    with _browser_pids_lock:
+        _browser_pids.add(pid)
+
+
+def _cleanup_browsers():
+    """Kill any browser processes we launched.  Called via atexit."""
+    with _browser_pids_lock:
+        for pid in _browser_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        _browser_pids.clear()
+
+    # Also kill any chromedriver/chromium processes that are children of
+    # this process (catches anything missed by PID tracking).
+    my_pid = os.getpid()
+    try:
+        result = subprocess.run(
+            ['ps', '-eo', 'pid,ppid,comm'],
+            capture_output=True, text=True, timeout=5)
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 3:
+                try:
+                    child_pid = int(parts[0])
+                    parent_pid = int(parts[1])
+                    comm = parts[2]
+                    if parent_pid == my_pid and (
+                            'chrome' in comm or 'chromedriver' in comm):
+                        os.kill(child_pid, signal.SIGKILL)
+                except (ValueError, ProcessLookupError, PermissionError):
+                    pass
+    except Exception:
+        pass
+
+
+atexit.register(_cleanup_browsers)
+
+
 class RateLimiter:
     """Thread-safe rate limiter that enforces a minimum delay between calls.
 
@@ -448,6 +499,12 @@ class SeleniumBrowser:
         self._driver.set_page_load_timeout(30)
         self._driver.set_script_timeout(120)
         self._driver.implicitly_wait(5)
+        # Track the chromedriver PID for cleanup on exit
+        try:
+            pid = self._driver.service.process.pid
+            _register_browser_pid(pid)
+        except Exception:
+            pass
 
     def navigate(self, url):
         self._driver.get(url)
@@ -517,6 +574,12 @@ class PlaywrightBrowser:
         )
         self._page.set_default_timeout(30000)
         self._page.set_default_navigation_timeout(30000)
+        # Track the browser process PID for cleanup on exit
+        try:
+            pid = self._browser.process.pid
+            _register_browser_pid(pid)
+        except Exception:
+            pass
 
     def navigate(self, url):
         self._page.goto(url, wait_until='load')
@@ -1760,10 +1823,37 @@ def main():
                         help='Suppress per-page progress, only show final summary')
     parser.add_argument('--help-audit', action='store_true',
                         help='Print a guide for using this tool to perform a WCAG audit')
+    parser.add_argument('--cleanup', action='store_true',
+                        help='Kill orphaned chromium/chromedriver processes from previous runs and exit')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Show detailed rule/node counts for pages with issues')
 
     args = parser.parse_args()
+
+    if args.cleanup:
+        # Kill any orphaned chromium/chromedriver processes owned by this user
+        killed = 0
+        try:
+            result = subprocess.run(
+                ['ps', '-u', str(os.getuid()), '-o', 'pid,comm'],
+                capture_output=True, text=True, timeout=5)
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        pid = int(parts[0])
+                        comm = parts[1]
+                        if pid != os.getpid() and (
+                                'chromedriver' in comm or 'chromium' in comm
+                                or 'chrome' in comm):
+                            os.kill(pid, signal.SIGKILL)
+                            killed += 1
+                    except (ValueError, ProcessLookupError, PermissionError):
+                        pass
+        except Exception:
+            pass
+        print("Killed {} orphaned browser process(es).".format(killed))
+        sys.exit(0)
 
     if args.help_audit:
         print("""
