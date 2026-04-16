@@ -1295,7 +1295,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             if should_scan(
                                     url, base_url, include_paths,
                                     exclude_paths, exclude_regex,
-                                    exclude_query, robots_parser):
+                                    robots_parser):
                                 return url
                         return None
 
