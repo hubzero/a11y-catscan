@@ -18,8 +18,12 @@ Examples:
 import argparse
 import json
 import os
+import re
+import signal
 import sys
 import time
+import urllib.request
+import urllib.error
 from collections import OrderedDict
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
@@ -157,7 +161,7 @@ def is_same_origin(url, base_url):
     return urlparse(url).netloc == urlparse(base_url).netloc
 
 
-def should_scan(url, base_url, include_paths, exclude_paths):
+def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None):
     if not is_same_origin(url, base_url):
         return False
     parsed = urlparse(url)
@@ -182,7 +186,34 @@ def should_scan(url, base_url, include_paths, exclude_paths):
         if any(path.startswith(p) for p in exclude_paths):
             return False
 
+    if exclude_regex:
+        for pat in exclude_regex:
+            if pat.search(path):
+                return False
+
     return True
+
+
+def http_status(url, timeout=10):
+    """Return HTTP status code via a lightweight HEAD request (falls back to
+    GET). Returns 0 on network error. Follows redirects."""
+    try:
+        req = urllib.request.Request(url, method='HEAD',
+                                     headers={'User-Agent': 'axe-spider/1.0'})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        try:
+            req = urllib.request.Request(url, method='GET',
+                                         headers={'User-Agent': 'axe-spider/1.0'})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except Exception:
+            return 0
 
 
 def extract_links(driver, base_url):
@@ -221,10 +252,22 @@ def run_axe(driver, axe_source, tags=None):
 
 
 def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
-                   include_paths=None, exclude_paths=None, verbose=False,
-                   config=None):
-    """Crawl the site starting from start_url and scan each page with axe-core."""
+                   include_paths=None, exclude_paths=None, exclude_regex=None,
+                   verbose=False, config=None,
+                   json_path=None, html_path=None, save_every=25,
+                   level_label=None):
+    """Crawl the site starting from start_url and scan each page with axe-core.
+
+    If json_path is provided, results are flushed to disk every `save_every`
+    pages and on SIGTERM/SIGINT so partial runs preserve progress.
+    """
     config = config or {}
+
+    # Line-buffered stdout so progress prints live
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
 
     if tags is None:
         level = level or DEFAULT_LEVEL
@@ -234,9 +277,9 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
                 level, ', '.join(sorted(WCAG_LEVELS.keys()))))
             sys.exit(1)
         tags = level_info['tags']
-        level_label = level_info['label']
+        level_label = level_label or level_info['label']
     else:
-        level_label = 'custom'
+        level_label = level_label or 'custom'
 
     page_wait = int(config.get('page_wait', 1))
     axe_source = load_axe_source()
@@ -254,20 +297,59 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
     print("  Max pages: {}".format(max_pages))
     if page_wait > 1:
         print("  Page wait: {}s".format(page_wait))
+    if json_path and save_every:
+        print("  Incremental save every {} pages".format(save_every))
     print()
 
+    def _flush(reason=''):
+        """Write partial results to disk (atomic rename)."""
+        if not json_path:
+            return
+        try:
+            tmp = json_path + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump(all_results, f, indent=2, default=str)
+            os.replace(tmp, json_path)
+            if html_path:
+                try:
+                    generate_html_report(all_results, html_path, start_url, level_label or 'WCAG')
+                except Exception as e:
+                    print('  (html flush failed: {})'.format(str(e)[:80]))
+            if reason:
+                print('  [flushed {} pages ({})]'.format(len(all_results), reason))
+        except Exception as e:
+            print('  (flush failed: {})'.format(str(e)[:80]))
+
+    # SIGTERM/SIGINT handler: flush partial results before exit
+    _interrupted = {'flag': False}
+    def _on_signal(signum, frame):
+        if _interrupted['flag']:
+            return
+        _interrupted['flag'] = True
+        print('\n!! Signal {} — flushing {} pages...'.format(signum, page_count))
+        _flush(reason='signal {}'.format(signum))
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
     try:
-        while queue and page_count < max_pages:
+        while queue and page_count < max_pages and not _interrupted['flag']:
             url = queue.pop(0)
             if url in visited:
                 continue
             visited.add(url)
 
-            if not should_scan(url, base_url, include_paths, exclude_paths):
+            if not should_scan(url, base_url, include_paths, exclude_paths, exclude_regex):
                 continue
 
             page_count += 1
             print("[{}/{}] Scanning: {}".format(page_count, max_pages, url))
+
+            # Lightweight HTTP status check — error pages get scanned but
+            # their links aren't followed (they typically render site nav
+            # chrome that would fan out the crawl from a dead URL).
+            status = http_status(url)
+            if status and status >= 400:
+                print("  HTTP {} (error page — scan but skip links)".format(status))
 
             try:
                 driver.get(url)
@@ -279,6 +361,18 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
                         print("  REDIRECTED to {}, skipping".format(current[:80]))
                     page_count -= 1
                     continue
+
+                # Detect same-origin redirects (e.g. login wall)
+                actual_url = normalize_url(current)
+                if actual_url != url:
+                    if verbose:
+                        print("  REDIRECTED: {} -> {}".format(url, actual_url))
+                    if actual_url in visited:
+                        if verbose:
+                            print("  SKIP: already scanned redirect target")
+                        continue
+                    visited.add(actual_url)
+                    url = actual_url
 
                 # Skip empty/broken pages (e.g. auth walls that render blank)
                 page_html = driver.page_source or ''
@@ -305,16 +399,19 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
                 all_results[url] = {
                     'url': url,
                     'timestamp': datetime.now().isoformat(),
+                    'http_status': status or None,
                     'violations': violations,
                     'incomplete': incomplete,
                     'passes': passes,
                     'inapplicable': results.get('inapplicable', []),
                 }
 
-                new_links = extract_links(driver, base_url)
-                for link in new_links:
-                    if link not in visited and link not in queue:
-                        queue.append(link)
+                # Don't follow links from error pages
+                if not status or status < 400:
+                    new_links = extract_links(driver, base_url)
+                    for link in new_links:
+                        if link not in visited and link not in queue:
+                            queue.append(link)
 
             except TimeoutException:
                 print("  TIMEOUT loading page, skipping")
@@ -323,8 +420,13 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
             except Exception as e:
                 print("  Error: {}, skipping".format(str(e)[:100]))
 
+            # Incremental flush
+            if json_path and save_every and page_count % save_every == 0:
+                _flush()
+
     finally:
         driver.quit()
+        _flush(reason='final')
 
     return all_results
 
@@ -657,6 +759,9 @@ def main():
                         help='Output file basename (default: axe-spider-YYYY-MM-DD-HHMMSS)')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: from config or current directory)')
+    parser.add_argument('--save-every', type=int, default=None,
+                        help='Flush reports every N pages (default: 25). '
+                             'Partial results survive if the scan is killed.')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Verbose output')
 
@@ -695,7 +800,14 @@ def main():
     # Resolve include paths: CLI only (config can set defaults)
     include_paths = args.include_path or config.get('include_paths')
 
+    # Resolve exclude regex from config
+    exclude_regex = None
+    regex_list = config.get('exclude_regex', [])
+    if regex_list and not args.no_default_excludes:
+        exclude_regex = [re.compile(p) for p in regex_list]
+
     # Resolve output
+    save_every = args.save_every or int(config.get('save_every', 25))
     basename = args.output or 'axe-spider-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
     output_dir = args.output_dir or config.get('output_dir', os.getcwd())
     os.makedirs(output_dir, exist_ok=True)
@@ -710,17 +822,17 @@ def main():
         level=args.level,
         include_paths=include_paths,
         exclude_paths=exclude_paths,
+        exclude_regex=exclude_regex,
         verbose=args.verbose,
         config=config,
+        json_path=json_path,
+        html_path=html_path,
+        save_every=save_every,
+        level_label=level_label,
     )
 
-    # Save JSON
-    with open(json_path, 'w') as f:
-        json.dump(results, f, indent=2, default=str)
+    # Final reports already flushed by crawl_and_scan
     print("\nJSON report: {}".format(json_path))
-
-    # Save HTML
-    generate_html_report(results, html_path, url, level_label=level_label)
     print("HTML report: {}".format(html_path))
 
     # Summary
