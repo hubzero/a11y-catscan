@@ -1485,11 +1485,11 @@ def main():
     parser.add_argument('--summary-json', action='store_true',
                         help='Print a one-line JSON summary to stdout (machine-parseable)')
     parser.add_argument('-q', '--quiet', action='store_true',
-                        help='Suppress per-page output, only show final summary')
+                        help='Suppress per-page progress, only show final summary')
     parser.add_argument('--help-audit', action='store_true',
                         help='Print a guide for using this tool to perform a WCAG audit')
     parser.add_argument('-v', '--verbose', action='store_true',
-                        help='Verbose output')
+                        help='Show detailed rule/node counts for pages with issues')
 
     args = parser.parse_args()
 
@@ -1561,7 +1561,18 @@ KEY FLAGS FOR LLM WORKFLOWS
 --diff PREV.jsonl   Show what changed since last scan
 --rescan PREV.jsonl Only re-scan pages that previously had issues
 --allowlist FILE    Suppress known-acceptable incompletes
--q                  Quiet — suppress per-page noise, show only summary
+-q                  Quiet — no per-page progress, just final summary
+-v                  Verbose — add detailed rule/node counts for problem pages
+
+OTHER NOTES
+-----------
+- robots.txt is respected by default.  Use --ignore-robots to scan
+  disallowed paths, or set ignore_robots: true in your config.
+- Reports are flushed every 25 pages (configurable with --save-every)
+  and on SIGTERM/SIGINT, so partial results survive if the scan is killed.
+- The scanner runs at low CPU priority (nice 10) and high OOM score
+  (1000) by default so it won't starve production services on shared
+  servers.  Both are configurable in axe-spider.yaml.
 """)
         sys.exit(0)
 

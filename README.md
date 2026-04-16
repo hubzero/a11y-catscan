@@ -51,6 +51,7 @@ All settings in `axe-spider.yaml` can be overridden on the command line.
 | `niceness` | — | 10 | OS nice level (0–19, higher = lower CPU priority) |
 | `oom_score_adj` | — | 1000 | Linux OOM killer score (1000 = killed first) |
 | `allowlist` | `--allowlist` | — | YAML file of known-acceptable incompletes |
+| `ignore_robots` | `--ignore-robots` | false | Ignore robots.txt restrictions |
 | `ignore_certificate_errors` | — | false | Accept self-signed TLS certs |
 | `chromium_path` | — | `/usr/bin/chromium-browser` | Path to Chrome/Chromium |
 | `chromedriver_path` | — | `/usr/bin/chromedriver` | Path to ChromeDriver |
@@ -83,6 +84,8 @@ Each scan produces:
 | `--include-path PREFIX` | Only scan URLs starting with this prefix (repeatable) |
 | `--exclude-path PREFIX` | Skip URLs starting with this prefix (repeatable) |
 | `--allowlist FILE` | Suppress known-acceptable incompletes from reports |
+| `--ignore-robots` | Ignore robots.txt (by default, disallowed paths are skipped) |
+| `--no-default-excludes` | Ignore exclude_paths from config file |
 
 ### Output control
 | Flag | Description |
@@ -90,13 +93,32 @@ Each scan produces:
 | `--llm` | Generate compact markdown report optimized for LLM context windows |
 | `--summary-json` | Print one-line JSON summary to stdout (machine-parseable) |
 | `--diff PREV.jsonl` | Compare against a previous scan — show fixed/new/remaining |
-| `-q` / `--quiet` | Suppress per-page output, show only final summary |
+| `-v` / `--verbose` | Show detailed rule/node counts for pages with issues |
+| `-q` / `--quiet` | Suppress per-page progress, show only final summary |
 
 ### Help
 | Flag | Description |
 |---|---|
 | `--help` | Show all options |
 | `--help-audit` | Print a WCAG audit workflow guide (useful for LLM assistants) |
+
+## Output levels
+
+The default output shows one compact line per page:
+
+```
+[1/500] https://example.com/ — 3 violations, 14 incomplete
+[2/500] https://example.com/about — clean
+```
+
+With `-v`, pages with issues also get a detailed breakdown:
+
+```
+[1/500] https://example.com/ — 3 violations, 14 incomplete
+  Violations: 2 (3 nodes), Incomplete: 1 (14 nodes), Passes: 25
+```
+
+With `-q`, only the final summary is shown.
 
 ## Workflow: scan → fix → verify
 
