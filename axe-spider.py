@@ -361,65 +361,207 @@ def load_axe_source():
         return f.read()
 
 
-def create_driver(config=None):
-    config = config or {}
+# ---------------------------------------------------------------------------
+# Browser abstraction — thin wrapper so crawl_and_scan doesn't care whether
+# Selenium or Playwright is behind it.  Both expose the same 6 methods:
+#   navigate(url), current_url, page_source, run_js(script),
+#   run_js_async(script, args), quit()
+# ---------------------------------------------------------------------------
 
-    # Pre-flight checks — catch missing binaries before Selenium's cryptic errors
-    chromium = config.get('chromium_path', '/usr/bin/chromium-browser')
-    chromedriver = config.get('chromedriver_path', '/usr/bin/chromedriver')
-    if not os.path.isfile(chromium):
-        print("ERROR: Chromium not found at: {}".format(chromium), file=sys.stderr)
-        print("  Install it or set chromium_path in axe-spider.yaml", file=sys.stderr)
-        sys.exit(2)
-    if not os.path.isfile(chromedriver):
-        print("ERROR: ChromeDriver not found at: {}".format(chromedriver), file=sys.stderr)
-        print("  Install it or set chromedriver_path in axe-spider.yaml", file=sys.stderr)
-        sys.exit(2)
+class SeleniumBrowser:
+    """Browser driver backed by Selenium + ChromeDriver."""
 
-    opts = Options()
-    opts.binary_location = chromium
-    opts.add_argument('--headless')
-    opts.add_argument('--no-sandbox')       # required in containers and when running as root
-    opts.add_argument('--disable-dev-shm-usage')  # prevent /dev/shm exhaustion in Docker
-    opts.add_argument('--disable-gpu')      # GPU not available in headless servers
-    opts.add_argument('--window-size=1280,1024')  # consistent viewport for layout-dependent checks
-    if config.get('ignore_certificate_errors') in (True, 'true', 'yes', '1'):
-        # Off by default — only enable for internal sites with self-signed certs.
-        # Accepting bad certs on public sites could mask MITM attacks.
-        opts.add_argument('--ignore-certificate-errors')
+    def __init__(self, config):
+        # Pre-flight checks — catch missing binaries before Selenium's cryptic errors
+        chromium = config.get('chromium_path', '/usr/bin/chromium-browser')
+        chromedriver = config.get('chromedriver_path', '/usr/bin/chromedriver')
+        if not os.path.isfile(chromium):
+            print("ERROR: Chromium not found at: {}".format(chromium), file=sys.stderr)
+            print("  Install it or set chromium_path in axe-spider.yaml", file=sys.stderr)
+            sys.exit(2)
+        if not os.path.isfile(chromedriver):
+            print("ERROR: ChromeDriver not found at: {}".format(chromedriver), file=sys.stderr)
+            print("  Install it or set chromedriver_path in axe-spider.yaml", file=sys.stderr)
+            sys.exit(2)
 
-    # Block file downloads.  The crawler follows all <a href> links, which may
-    # point to .zip, .tar.gz, or other large binaries.  Without this, Chromium
-    # would download them to disk, wasting bandwidth and filling up /tmp.
-    prefs = {
-        'download_restrictions': 3,         # 3 = block all downloads
-        'download.default_directory': '/dev/null',
-        'download.prompt_for_download': False,
-        'profile.default_content_setting_values.automatic_downloads': 2,
-    }
-    opts.add_experimental_option('prefs', prefs)
+        opts = Options()
+        opts.binary_location = chromium
+        opts.add_argument('--headless')
+        opts.add_argument('--no-sandbox')
+        opts.add_argument('--disable-dev-shm-usage')
+        opts.add_argument('--disable-gpu')
+        opts.add_argument('--window-size=1280,1024')
+        if config.get('ignore_certificate_errors') in (True, 'true', 'yes', '1'):
+            opts.add_argument('--ignore-certificate-errors')
 
-    # Selenium 4 uses Service(), Selenium 3 uses executable_path=.
-    # We try the new API first and fall back to the old one so the script
-    # works on both versions without requiring users to upgrade.
-    try:
+        # Block file downloads — crawler follows all links, don't fetch binaries
+        prefs = {
+            'download_restrictions': 3,
+            'download.default_directory': '/dev/null',
+            'download.prompt_for_download': False,
+            'profile.default_content_setting_values.automatic_downloads': 2,
+        }
+        opts.add_experimental_option('prefs', prefs)
+
+        # Selenium 4 uses Service(), Selenium 3 uses executable_path=
         try:
-            from selenium.webdriver.chrome.service import Service
-            driver = webdriver.Chrome(service=Service(chromedriver), options=opts)
-        except (ImportError, TypeError):
-            driver = webdriver.Chrome(executable_path=chromedriver, options=opts)
-    except WebDriverException as e:
-        print("ERROR: Could not start browser.", file=sys.stderr)
-        # Extract just the useful message, skip Selenium's long doc URLs
-        msg = str(e).split('\n')[0][:200]
-        print("  {}".format(msg), file=sys.stderr)
-        print("  Chromium: {}  ChromeDriver: {}".format(chromium, chromedriver),
-              file=sys.stderr)
-        sys.exit(2)
-    driver.set_page_load_timeout(30)
-    driver.set_script_timeout(120)
-    driver.implicitly_wait(5)
-    return driver
+            try:
+                from selenium.webdriver.chrome.service import Service
+                self._driver = webdriver.Chrome(
+                    service=Service(chromedriver), options=opts)
+            except (ImportError, TypeError):
+                self._driver = webdriver.Chrome(
+                    executable_path=chromedriver, options=opts)
+        except WebDriverException as e:
+            print("ERROR: Could not start browser.", file=sys.stderr)
+            msg = str(e).split('\n')[0][:200]
+            print("  {}".format(msg), file=sys.stderr)
+            print("  Chromium: {}  ChromeDriver: {}".format(
+                chromium, chromedriver), file=sys.stderr)
+            sys.exit(2)
+        self._driver.set_page_load_timeout(30)
+        self._driver.set_script_timeout(120)
+        self._driver.implicitly_wait(5)
+
+    def navigate(self, url):
+        self._driver.get(url)
+
+    @property
+    def current_url(self):
+        return self._driver.current_url
+
+    @property
+    def page_source(self):
+        return self._driver.page_source
+
+    def run_js(self, script):
+        return self._driver.execute_script(script)
+
+    def run_js_async(self, script, args):
+        return self._driver.execute_async_script(script, args)
+
+    def quit(self):
+        self._driver.quit()
+
+
+class PlaywrightBrowser:
+    """Browser driver backed by Playwright (faster, no chromedriver needed).
+
+    Install: pip install playwright && playwright install chromium
+    """
+
+    def __init__(self, config):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            print("ERROR: playwright is not installed.", file=sys.stderr)
+            print("  Install it with:", file=sys.stderr)
+            print("    pip install playwright", file=sys.stderr)
+            print("    playwright install chromium", file=sys.stderr)
+            sys.exit(2)
+
+        self._pw = sync_playwright().start()
+
+        # Build launch arguments similar to our Selenium config
+        launch_args = [
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+        ]
+        ignore_certs = config.get('ignore_certificate_errors') in (
+            True, 'true', 'yes', '1')
+
+        # Playwright manages its own Chromium binary, but if a custom path
+        # is set in config, use it instead.
+        chromium_path = config.get('chromium_path')
+        if chromium_path and os.path.isfile(chromium_path):
+            self._browser = self._pw.chromium.launch(
+                headless=True,
+                executable_path=chromium_path,
+                args=launch_args,
+            )
+        else:
+            self._browser = self._pw.chromium.launch(
+                headless=True,
+                args=launch_args,
+            )
+
+        self._page = self._browser.new_page(
+            viewport={'width': 1280, 'height': 1024},
+            ignore_https_errors=ignore_certs,
+        )
+        self._page.set_default_timeout(30000)
+        self._page.set_default_navigation_timeout(30000)
+
+    def navigate(self, url):
+        self._page.goto(url, wait_until='load')
+
+    @property
+    def current_url(self):
+        return self._page.url
+
+    @property
+    def page_source(self):
+        return self._page.content()
+
+    def run_js(self, script):
+        # Playwright's evaluate() auto-returns the last expression, so it
+        # doesn't support bare "return" statements like Selenium does.
+        # Strip leading "return " if present to make it compatible.
+        script = script.strip()
+        if script.startswith('return '):
+            script = script[7:]
+        # For large scripts (like axe-core injection, ~500KB), use
+        # add_script_tag instead of evaluate — it's more reliable and
+        # doesn't hit expression-length limits.
+        if len(script) > 10000:
+            self._page.add_script_tag(content=script)
+            return None
+        return self._page.evaluate(script)
+
+    def run_js_async(self, script, args):
+        """Run axe.run() via Playwright's native Promise support.
+
+        Selenium uses a callback-based async pattern.  Playwright can
+        await Promises directly, so we skip the callback wrapper and
+        call axe.run() as a Promise.
+        """
+        return self._page.evaluate(
+            """(opts) => {
+                return axe.run(document, opts).catch(err => {
+                    return {error: err.toString()};
+                });
+            }""",
+            args
+        )
+
+    def quit(self):
+        try:
+            self._page.close()
+        except Exception:
+            pass
+        try:
+            self._browser.close()
+        except Exception:
+            pass
+        try:
+            self._pw.stop()
+        except Exception:
+            pass
+
+
+def create_browser(config=None):
+    """Create a browser instance based on the 'driver' config setting.
+
+    Returns a SeleniumBrowser or PlaywrightBrowser — both expose the same
+    interface so the rest of the code doesn't need to know which one it is.
+    """
+    config = config or {}
+    driver_type = config.get('driver', 'selenium').lower()
+
+    if driver_type == 'playwright':
+        return PlaywrightBrowser(config)
+    else:
+        return SeleniumBrowser(config)
 
 
 def normalize_url(url):
@@ -534,7 +676,7 @@ def http_status(url, timeout=10):
 def extract_links(driver, base_url):
     """Extract all same-origin links from the current page."""
     try:
-        links = driver.execute_script(
+        links = driver.run_js(
             "return Array.from(document.querySelectorAll('a[href]'))"
             ".map(a => a.href)"
             ".filter(h => h.startsWith('http'))"
@@ -549,44 +691,40 @@ def run_axe(driver, axe_source, tags=None, rules=None):
 
     We inject the full axe-core JS library into every page (rather than loading
     it from a URL) because the target site may have a Content-Security-Policy
-    that blocks external scripts.  The injection is done via Selenium's
-    execute_script, which bypasses CSP.
+    that blocks external scripts.
     """
     # Step 1: Inject the axe-core library into the page's JS context.
-    # This defines the global `axe` object that we call in step 2.
     try:
-        driver.execute_script(axe_source)
+        driver.run_js(axe_source)
     except Exception as e:
         return {'error': 'axe-core injection failed: {}'.format(str(e)[:100])}
 
     # Step 2: Configure which rules/tags to run.
-    # --rule overrides --level/--tags: if specific rules are requested,
-    # only those rules run (useful for fast targeted checks).
     run_opts = {}
     if rules:
         run_opts['runOnly'] = {'type': 'rule', 'values': rules}
     elif tags:
         run_opts['runOnly'] = {'type': 'tag', 'values': tags}
 
-    # Step 3: Run axe.run() asynchronously.  We use execute_async_script
-    # because axe.run() returns a Promise.  The callback pattern lets
-    # Selenium wait for the Promise to resolve before returning.
-    script = """
-    var callback = arguments[arguments.length - 1];
-    var opts = arguments[0];
-    axe.run(document, opts).then(function(results) {
-        callback(results);
-    }).catch(function(err) {
-        callback({error: err.toString()});
-    });
-    """
+    # Step 3: Run axe.run() via the browser's async JS execution.
+    # SeleniumBrowser uses execute_async_script with a callback pattern;
+    # PlaywrightBrowser rewrites this into a native Promise await.
     try:
-        results = driver.execute_async_script(script, run_opts)
+        results = driver.run_js_async(
+            """
+            var callback = arguments[arguments.length - 1];
+            var opts = arguments[0];
+            axe.run(document, opts).then(function(results) {
+                callback(results);
+            }).catch(function(err) {
+                callback({error: err.toString()});
+            });
+            """,
+            run_opts
+        )
     except Exception as e:
         return {'error': 'axe.run() failed: {}'.format(str(e)[:100])}
     if results is None:
-        # This can happen if the page navigated away (e.g. meta refresh)
-        # between injection and execution.
         return {'error': 'axe.run() returned null (page may have navigated away)'}
     return results
 
@@ -643,7 +781,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
 
     page_wait = _safe_int(config.get('page_wait', 1), 1)
     axe_source = load_axe_source()
-    driver = create_driver(config)
+    driver = create_browser(config)
     base_url = start_url
 
     visited = set()
@@ -763,10 +901,10 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                     page_count, max_pages, status, url))
 
             try:
-                driver.get(url)
+                driver.navigate(url)
                 time.sleep(page_wait)
 
-                # After the page loads, check where Chromium actually ended up.
+                # After the page loads, check where the browser actually ended up.
                 # The server may have redirected us (e.g. HTTP 302).
                 current = driver.current_url
 
@@ -794,7 +932,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                     url = actual_url  # report results under the actual URL
 
                 # Skip empty/broken pages (e.g. auth walls that render blank)
-                page_html = driver.page_source or ''
+                page_html = (driver.page_source or '')
                 if len(page_html) < 100:
                     if not quiet:
                         print("  Empty page ({} bytes), skipping".format(len(page_html)))
@@ -805,8 +943,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 # it wraps the content in a minimal HTML shell that doesn't contain
                 # a real <html> tag from the server.  We check the first 80 chars
                 # of the rendered DOM to detect this.
-                page_start = driver.execute_script(
-                    "return document.documentElement.outerHTML.substring(0, 80);") or ''
+                page_start = (driver.run_js(
+                    "return document.documentElement.outerHTML.substring(0, 80);") or '')
                 if page_start and '<html' not in page_start.lower():
                     if not quiet:
                         print("  SKIP: non-HTML response")
