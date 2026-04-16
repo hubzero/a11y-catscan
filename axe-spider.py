@@ -1282,8 +1282,11 @@ def main():
                         help='Re-scan only pages that had violations or incompletes in a previous scan')
     parser.add_argument('--rule', action='append', default=None,
                         help='Only run specific axe rules (repeatable, e.g. --rule color-contrast)')
-    parser.add_argument('--page', action='store_true',
-                        help='Scan only the given URL (no crawling). Fast single-page verify.')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--page', action='store_true',
+                       help='Scan only the given URL (no crawling). Fast single-page verify.')
+    group.add_argument('--crawl', action='store_true', default=True,
+                       help='Crawl and discover pages from the starting URL (default).')
     parser.add_argument('--llm', action='store_true',
                         help='Generate a compact markdown summary optimized for LLM context')
     parser.add_argument('--summary-json', action='store_true',
