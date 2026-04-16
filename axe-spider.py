@@ -356,6 +356,7 @@ def get_axe_version():
 
 
 def load_axe_source():
+    """Read the bundled axe-core JS library into a string for injection."""
     if not os.path.exists(AXE_JS_PATH):
         print("ERROR: axe-core not found at {}".format(AXE_JS_PATH), file=sys.stderr)
         print("Download it: curl -o axe.min.js https://cdn.jsdelivr.net/npm/axe-core/axe.min.js",
@@ -542,97 +543,74 @@ class SeleniumBrowser:
 class PlaywrightBrowser:
     """Browser driver backed by Playwright (faster, no chromedriver needed).
 
-    Install: pip install playwright && playwright install chromium
+    Used for serial scanning (workers=1).  For parallel scanning (workers>1),
+    crawl_and_scan uses Playwright's async API directly — it doesn't go
+    through this class.
 
-    For parallel workers, one PlaywrightBrowser owns the Playwright instance
-    and browser process.  Additional workers call new_page() to get a
-    lightweight sibling that shares the same browser but has its own page.
+    Install: pip install playwright && playwright install chromium
     """
 
-    def __init__(self, config, _shared_browser=None, _shared_pw=None):
-        self._owns_browser = (_shared_browser is None)
-        self._ignore_certs = config.get('ignore_certificate_errors') in (
+    def __init__(self, config):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            print("ERROR: playwright is not installed.", file=sys.stderr)
+            print("  Install it with:", file=sys.stderr)
+            print("    pip install playwright", file=sys.stderr)
+            print("    playwright install chromium", file=sys.stderr)
+            sys.exit(2)
+
+        self._pw = sync_playwright().start()
+        ignore_certs = config.get('ignore_certificate_errors') in (
             True, 'true', 'yes', '1')
+        launch_args = ['--disable-dev-shm-usage', '--disable-gpu']
 
-        if self._owns_browser:
-            # First instance — start Playwright and launch the browser
-            try:
-                from playwright.sync_api import sync_playwright
-            except ImportError:
-                print("ERROR: playwright is not installed.", file=sys.stderr)
-                print("  Install it with:", file=sys.stderr)
-                print("    pip install playwright", file=sys.stderr)
-                print("    playwright install chromium", file=sys.stderr)
-                sys.exit(2)
-
-            self._pw = sync_playwright().start()
-            launch_args = [
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-            ]
-            chromium_path = config.get('chromium_path')
-            if chromium_path and os.path.isfile(chromium_path):
-                self._browser = self._pw.chromium.launch(
-                    headless=True,
-                    executable_path=chromium_path,
-                    args=launch_args,
-                )
-            else:
-                self._browser = self._pw.chromium.launch(
-                    headless=True,
-                    args=launch_args,
-                )
-            try:
-                pid = self._browser.process.pid
-                _register_browser_pid(pid)
-            except Exception:
-                pass
+        # Playwright manages its own Chromium, but use a custom path if set
+        chromium_path = config.get('chromium_path')
+        if chromium_path and os.path.isfile(chromium_path):
+            self._browser = self._pw.chromium.launch(
+                headless=True, executable_path=chromium_path,
+                args=launch_args)
         else:
-            # Additional worker — share the existing browser, just make a new page
-            self._pw = _shared_pw
-            self._browser = _shared_browser
+            self._browser = self._pw.chromium.launch(
+                headless=True, args=launch_args)
+
+        try:
+            _register_browser_pid(self._browser.process.pid)
+        except Exception:
+            pass
 
         self._page = self._browser.new_page(
             viewport={'width': 1280, 'height': 1024},
-            ignore_https_errors=self._ignore_certs,
+            ignore_https_errors=ignore_certs,
         )
         self._page.set_default_timeout(30000)
         self._page.set_default_navigation_timeout(30000)
-        self._config = config
-
-    def new_page(self):
-        """Create a sibling browser instance sharing the same browser process.
-
-        Used for parallel workers — each gets its own page but they share
-        one Chromium process (much lighter than separate processes).
-        """
-        return PlaywrightBrowser(
-            self._config,
-            _shared_browser=self._browser,
-            _shared_pw=self._pw,
-        )
 
     def navigate(self, url):
+        """Load a URL in the browser."""
         self._page.goto(url, wait_until='load')
 
     @property
     def current_url(self):
+        """Return the current page URL (after any redirects)."""
         return self._page.url
 
     @property
     def page_source(self):
+        """Return the page's HTML content."""
         return self._page.content()
 
     def run_js(self, script):
-        # Playwright's evaluate() auto-returns the last expression, so it
-        # doesn't support bare "return" statements like Selenium does.
-        # Strip leading "return " if present to make it compatible.
+        """Execute JavaScript synchronously and return the result.
+
+        Handles two Playwright quirks:
+        - Strips 'return ' prefix (Playwright auto-returns expressions)
+        - Uses add_script_tag for large scripts (axe-core is ~500KB)
+        """
         script = script.strip()
         if script.startswith('return '):
             script = script[7:]
-        # For large scripts (like axe-core injection, ~500KB), use
-        # add_script_tag instead of evaluate — it's more reliable and
-        # doesn't hit expression-length limits.
         if len(script) > 10000:
             self._page.add_script_tag(content=script)
             return None
@@ -641,9 +619,8 @@ class PlaywrightBrowser:
     def run_js_async(self, script, args):
         """Run axe.run() via Playwright's native Promise support.
 
-        Selenium uses a callback-based async pattern.  Playwright can
-        await Promises directly, so we skip the callback wrapper and
-        call axe.run() as a Promise.
+        Selenium uses a callback pattern for async JS.  Playwright can
+        await Promises directly, so we call axe.run() as a Promise.
         """
         return self._page.evaluate(
             """(opts) => {
@@ -654,119 +631,20 @@ class PlaywrightBrowser:
             args
         )
 
-    def scan_batch(self, urls, axe_source, tags, rules, page_wait, rate_limiter):
-        """Scan multiple URLs concurrently using Playwright's async API.
-
-        Creates a temporary page per URL, runs them all in parallel via
-        asyncio.gather, returns list of (url, page_data, new_links) tuples.
-        Much faster than scanning serially because page loads overlap.
-        """
-        import asyncio
-
-        async def _scan_one(browser_ctx, url, axe_src, run_opts, pw):
-            """Scan a single URL in an async context."""
-            page = await browser_ctx.new_page(
-                viewport={'width': 1280, 'height': 1024},
-                ignore_https_errors=self._ignore_certs,
-            )
-            try:
-                rate_limiter.wait()
-                await page.goto(url, wait_until='load')
-                await page.wait_for_timeout(page_wait * 1000)
-
-                current = page.url
-                actual_url = normalize_url(current)
-
-                # Skip empty pages
-                content = await page.content()
-                if len(content or '') < 100:
-                    return None
-
-                # Inject axe-core
-                await page.add_script_tag(content=axe_src)
-
-                # Run axe
-                results = await page.evaluate(
-                    """(opts) => {
-                        return axe.run(document, opts).catch(err => {
-                            return {error: err.toString()};
-                        });
-                    }""",
-                    run_opts
-                )
-                if results is None or 'error' in results:
-                    return None
-
-                # Extract links
-                links = await page.evaluate(
-                    "Array.from(document.querySelectorAll('a[href]'))"
-                    ".map(a => a.href)"
-                    ".filter(h => h.startsWith('http'))"
-                )
-                new_links = [normalize_url(lnk) for lnk in (links or []) if lnk]
-
-                page_data = {
-                    'url': actual_url,
-                    'timestamp': datetime.now().isoformat(),
-                    'http_status': None,
-                    'violations': results.get('violations', []),
-                    'incomplete': results.get('incomplete', []),
-                    'passes': results.get('passes', []),
-                    'inapplicable': results.get('inapplicable', []),
-                }
-                return (actual_url, page_data, new_links)
-            except Exception:
-                return None
-            finally:
-                await page.close()
-
-        async def _run_batch(urls_batch):
-            from playwright.async_api import async_playwright
-            async with async_playwright() as pw:
-                launch_args = ['--disable-dev-shm-usage', '--disable-gpu']
-                chromium_path = self._config.get('chromium_path')
-                if chromium_path and os.path.isfile(chromium_path):
-                    browser = await pw.chromium.launch(
-                        headless=True, executable_path=chromium_path,
-                        args=launch_args)
-                else:
-                    browser = await pw.chromium.launch(
-                        headless=True, args=launch_args)
-
-                run_opts = {}
-                if rules:
-                    run_opts['runOnly'] = {'type': 'rule', 'values': rules}
-                elif tags:
-                    run_opts['runOnly'] = {'type': 'tag', 'values': tags}
-
-                ctx = await browser.new_context()
-                tasks = [_scan_one(ctx, u, axe_source, run_opts, pw)
-                         for u in urls_batch]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                await ctx.close()
-                await browser.close()
-
-                # Filter out exceptions and Nones
-                return [r for r in results
-                        if r is not None and not isinstance(r, Exception)]
-
-        # Run the async batch from synchronous code
-        return asyncio.run(_run_batch(urls))
-
     def quit(self):
+        """Close the page, browser, and Playwright process."""
         try:
             self._page.close()
         except Exception:
             pass
-        if self._owns_browser:
-            try:
-                self._browser.close()
-            except Exception:
-                pass
-            try:
-                self._pw.stop()
-            except Exception:
-                pass
+        try:
+            self._browser.close()
+        except Exception:
+            pass
+        try:
+            self._pw.stop()
+        except Exception:
+            pass
 
 
 def create_browser(config=None):
@@ -792,6 +670,7 @@ def normalize_url(url):
 
 
 def is_same_origin(url, base_url):
+    """Check whether two URLs share the same scheme+host+port."""
     return urlparse(url).netloc == urlparse(base_url).netloc
 
 
@@ -814,6 +693,11 @@ def load_robots_txt(base_url):
 
 def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None,
                 exclude_query=None, robots_parser=None):
+    """Decide whether a URL should be scanned based on all filter rules.
+
+    Checks (in order): same-origin, file extension, include/exclude paths,
+    exclude regex, query string filters, and robots.txt.
+    """
     if not is_same_origin(url, base_url):
         return False
     parsed = urlparse(url)
@@ -1009,7 +893,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     # can't coexist in the same process).
     use_playwright_async = (driver_type == 'playwright' and num_workers > 1)
     if use_playwright_async:
-        driver = None  # no sync browser — scan_batch creates its own async one
+        driver = None  # no sync browser — async sliding window creates its own
     else:
         driver = create_browser(config)
     base_url = start_url
@@ -1108,7 +992,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
 
     def _scan_one_page(browser, url):
         """Scan a single page and return (url, page_data, new_links, elapsed) or None."""
-        page_start = time.time()
+        page_timer = time.time()
         status = http_status(url)
 
         # Enforce cross-worker rate limit (from robots.txt crawl-delay)
@@ -1171,7 +1055,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             if not no_crawl and is_ok:
                 new_links = extract_links(browser, base_url)
 
-            elapsed = time.time() - page_start
+            elapsed = time.time() - page_timer
             return (url, page_data, new_links, elapsed)
 
         except Exception as e:

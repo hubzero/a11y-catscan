@@ -53,8 +53,10 @@ All settings in `axe-spider.yaml` can be overridden on the command line.
 | `allowlist` | `--allowlist` | — | YAML file of known-acceptable incompletes |
 | `ignore_robots` | `--ignore-robots` | false | Ignore robots.txt restrictions |
 | `ignore_certificate_errors` | — | false | Accept self-signed TLS certs |
+| `driver` | `--driver` | `selenium` | Browser driver: `selenium` or `playwright` |
+| `workers` | `--workers` | 1 | Parallel browser instances |
 | `chromium_path` | — | `/usr/bin/chromium-browser` | Path to Chrome/Chromium |
-| `chromedriver_path` | — | `/usr/bin/chromedriver` | Path to ChromeDriver |
+| `chromedriver_path` | — | `/usr/bin/chromedriver` | Path to ChromeDriver (selenium only) |
 
 ## Output files
 
@@ -77,6 +79,12 @@ Each scan produces:
 | `--urls FILE` | Scan a specific list of URLs from a file (one per line) |
 | `--rescan PREV.jsonl` | Re-scan only pages that had issues in a previous scan |
 
+### Performance
+| Flag | Description |
+|---|---|
+| `--driver TYPE` | `selenium` (default) or `playwright` (~2x faster, manages own Chromium) |
+| `--workers N` | Parallel browser instances (default: 1). Playwright uses async pages in one process; Selenium uses separate processes (~300MB each) |
+
 ### Filtering
 | Flag | Description |
 |---|---|
@@ -96,29 +104,38 @@ Each scan produces:
 | `-v` / `--verbose` | Show detailed rule/node counts for pages with issues |
 | `-q` / `--quiet` | Suppress per-page progress, show only final summary |
 
-### Help
+### Maintenance
 | Flag | Description |
 |---|---|
+| `--cleanup` | Kill orphaned chromium/chromedriver processes from previous runs |
 | `--help` | Show all options |
 | `--help-audit` | Print a WCAG audit workflow guide (useful for LLM assistants) |
 
 ## Output levels
 
-The default output shows one compact line per page:
+The default output shows one compact line per page with timing:
 
 ```
-[1/500] https://example.com/ — 3 violations, 14 incomplete
-[2/500] https://example.com/about — clean
+[1/500] https://example.com/ — 3 violations, 14 incomplete (4.2s)
+[2/500] https://example.com/about — clean (3.8s)
 ```
 
-With `-v`, pages with issues also get a detailed breakdown:
+With `--workers`, worker IDs are shown:
 
 ```
-[1/500] https://example.com/ — 3 violations, 14 incomplete
-  Violations: 2 (3 nodes), Incomplete: 1 (14 nodes), Passes: 25
+[1/500] W1 https://example.com/ — 14 incomplete (4.3s)
+[2/500] W2 https://example.com/members — clean (4.4s)
+[3/500] W3 https://example.com/about — clean (4.1s)
 ```
 
+With `-v`, pages with issues also get a detailed breakdown.
 With `-q`, only the final summary is shown.
+
+The final summary shows throughput:
+
+```
+Scan complete: 500 pages in 312.4s (0.6s/page)
+```
 
 ## Workflow: scan → fix → verify
 
