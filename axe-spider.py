@@ -41,6 +41,8 @@ from collections import deque
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 
+# Selenium is the only external dependency.  We catch ImportError here
+# rather than letting Python's traceback confuse users who haven't installed it.
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
@@ -53,11 +55,15 @@ except ImportError:
     print("  (Python 3.7+ required for Selenium 4)", file=sys.stderr)
     sys.exit(2)
 
+# All supporting files (axe.min.js, config) live alongside this script.
+# This lets the tool work as a self-contained directory you can clone
+# and run from anywhere without installation.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AXE_JS_PATH = os.path.join(SCRIPT_DIR, 'axe.min.js')
 DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, 'axe-spider.yaml')
 
-# File extensions that are never HTML — skip without loading in browser
+# File extensions that are never HTML pages.  Using a frozenset gives O(1)
+# lookup instead of scanning a list on every URL the crawler discovers.
 SKIP_EXTENSIONS = frozenset((
     '.pdf', '.jpg', '.jpeg', '.png', '.gif', '.svg', '.ico',
     '.css', '.js', '.zip', '.tar', '.gz', '.mp4', '.mp3',
@@ -69,7 +75,9 @@ SKIP_EXTENSIONS = frozenset((
 # axe-core version (read from the bundled file header on first use)
 AXE_VERSION = None
 
-# WCAG level presets: maps a level name to the axe-core tags to run
+# WCAG level presets.  Each level includes the tags for all lower levels
+# (e.g. AA includes A rules too).  These map to the tag values that
+# axe-core's runOnly option accepts.
 WCAG_LEVELS = {
     'wcag2a': {
         'tags': ['wcag2a'],
@@ -191,7 +199,10 @@ def _parse_wcag_sc(tags):
     """
     criteria = set()
     for tag in tags:
-        # Match wcag + 3-4 digits (SC reference, not level)
+        # axe-core tags encode SC numbers as concatenated digits: 'wcag143' = SC 1.4.3.
+        # Level tags like 'wcag2a' and 'wcag21aa' have fewer than 3 digits or contain
+        # letters, so the \d+ group won't match them.  The third group is \d+ (not \d)
+        # to handle two-digit sub-clauses like SC 1.4.10 → 'wcag1410'.
         m = re.match(r'^wcag(\d)(\d)(\d+)$', tag)
         if m:
             sc = '{}.{}.{}'.format(m.group(1), m.group(2), m.group(3))
@@ -223,7 +234,10 @@ def load_allowlist(path):
         if isinstance(data, list):
             entries = data
     except ImportError:
-        # Simple fallback parser for list-of-dicts
+        # PyYAML not installed — fall back to a minimal parser that handles
+        # the subset of YAML we use: a flat list of key:value dicts.
+        # Each "- key: value" starts a new dict entry.  This covers the
+        # allowlist format but won't handle nested structures.
         with open(path) as f:
             current = {}
             for line in f:
@@ -231,6 +245,7 @@ def load_allowlist(path):
                 stripped = line.lstrip()
                 if not stripped or stripped.startswith('#'):
                     continue
+                # "- " marks the start of a new list item
                 if stripped.startswith('- '):
                     if current:
                         entries.append(current)
@@ -289,14 +304,18 @@ def load_config(config_path=None):
             with open(path) as f:
                 config = yaml.safe_load(f) or {}
         except ImportError:
-            # PyYAML not installed — fall back to simple key: value parsing
+            # PyYAML not installed — fall back to a minimal parser that handles
+            # the subset of YAML our config files use: scalar "key: value" pairs
+            # and simple lists of strings ("- item" lines under a key with no value).
+            # This won't handle nested dicts, multi-line values, or flow syntax.
             with open(path) as f:
-                in_list = None
+                in_list = None  # tracks which key we're appending list items to
                 for line in f:
                     line = line.rstrip()
                     stripped = line.lstrip()
                     if not stripped or stripped.startswith('#'):
                         continue
+                    # "- item" under a list key → append to that key's list
                     if stripped.startswith('- ') and in_list:
                         config.setdefault(in_list, []).append(stripped[2:].strip())
                         continue
@@ -305,9 +324,11 @@ def load_config(config_path=None):
                         key = key.strip()
                         val = val.strip()
                         if val == '' or val == '[]':
+                            # Key with no value → start of a list
                             in_list = key
                             config[key] = []
                         else:
+                            # Simple scalar key: value
                             in_list = None
                             config[key] = val
                     else:
@@ -357,22 +378,29 @@ def create_driver(config=None):
     opts = Options()
     opts.binary_location = chromium
     opts.add_argument('--headless')
-    opts.add_argument('--no-sandbox')
-    opts.add_argument('--disable-dev-shm-usage')
-    opts.add_argument('--disable-gpu')
-    opts.add_argument('--window-size=1280,1024')
+    opts.add_argument('--no-sandbox')       # required in containers and when running as root
+    opts.add_argument('--disable-dev-shm-usage')  # prevent /dev/shm exhaustion in Docker
+    opts.add_argument('--disable-gpu')      # GPU not available in headless servers
+    opts.add_argument('--window-size=1280,1024')  # consistent viewport for layout-dependent checks
     if config.get('ignore_certificate_errors') in (True, 'true', 'yes', '1'):
+        # Off by default — only enable for internal sites with self-signed certs.
+        # Accepting bad certs on public sites could mask MITM attacks.
         opts.add_argument('--ignore-certificate-errors')
 
-    # Block file downloads — we only need rendered HTML
+    # Block file downloads.  The crawler follows all <a href> links, which may
+    # point to .zip, .tar.gz, or other large binaries.  Without this, Chromium
+    # would download them to disk, wasting bandwidth and filling up /tmp.
     prefs = {
-        'download_restrictions': 3,
+        'download_restrictions': 3,         # 3 = block all downloads
         'download.default_directory': '/dev/null',
         'download.prompt_for_download': False,
         'profile.default_content_setting_values.automatic_downloads': 2,
     }
     opts.add_experimental_option('prefs', prefs)
 
+    # Selenium 4 uses Service(), Selenium 3 uses executable_path=.
+    # We try the new API first and fall back to the old one so the script
+    # works on both versions without requiring users to upgrade.
     try:
         try:
             from selenium.webdriver.chrome.service import Service
@@ -442,16 +470,26 @@ def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None,
 
 
 def http_status(url, timeout=10):
-    """Return HTTP status code via a lightweight HEAD request (falls back to
-    GET). Returns 0 on network error. Follows redirects."""
+    """Return HTTP status code via a lightweight HEAD request.
+
+    Falls back to GET if the server rejects HEAD (some do).
+    Returns 0 on network error.  Follows redirects — the returned
+    status reflects the final response, not intermediate 3xx hops.
+
+    This is used as a pre-check before loading pages in Chromium.
+    It's much cheaper than a full browser load and lets us identify
+    error pages (4xx/5xx) without wasting Chromium resources.
+    """
     try:
         req = urllib.request.Request(url, method='HEAD',
                                      headers={'User-Agent': 'axe-spider/1.0'})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status
     except urllib.error.HTTPError as e:
+        # 4xx/5xx errors are still valid status codes we want to return
         return e.code
     except Exception:
+        # HEAD failed (connection error, or server rejects HEAD) — try GET
         try:
             req = urllib.request.Request(url, method='GET',
                                          headers={'User-Agent': 'axe-spider/1.0'})
@@ -460,7 +498,7 @@ def http_status(url, timeout=10):
         except urllib.error.HTTPError as e:
             return e.code
         except Exception:
-            return 0
+            return 0  # network error — host unreachable, DNS failure, etc.
 
 
 def extract_links(driver, base_url):
@@ -477,18 +515,32 @@ def extract_links(driver, base_url):
 
 
 def run_axe(driver, axe_source, tags=None, rules=None):
-    """Inject axe-core and run analysis on the current page."""
+    """Inject axe-core into the current page and run accessibility analysis.
+
+    We inject the full axe-core JS library into every page (rather than loading
+    it from a URL) because the target site may have a Content-Security-Policy
+    that blocks external scripts.  The injection is done via Selenium's
+    execute_script, which bypasses CSP.
+    """
+    # Step 1: Inject the axe-core library into the page's JS context.
+    # This defines the global `axe` object that we call in step 2.
     try:
         driver.execute_script(axe_source)
     except Exception as e:
         return {'error': 'axe-core injection failed: {}'.format(str(e)[:100])}
 
+    # Step 2: Configure which rules/tags to run.
+    # --rule overrides --level/--tags: if specific rules are requested,
+    # only those rules run (useful for fast targeted checks).
     run_opts = {}
     if rules:
         run_opts['runOnly'] = {'type': 'rule', 'values': rules}
     elif tags:
         run_opts['runOnly'] = {'type': 'tag', 'values': tags}
 
+    # Step 3: Run axe.run() asynchronously.  We use execute_async_script
+    # because axe.run() returns a Promise.  The callback pattern lets
+    # Selenium wait for the Promise to resolve before returning.
     script = """
     var callback = arguments[arguments.length - 1];
     var opts = arguments[0];
@@ -503,6 +555,8 @@ def run_axe(driver, axe_source, tags=None, rules=None):
     except Exception as e:
         return {'error': 'axe.run() failed: {}'.format(str(e)[:100])}
     if results is None:
+        # This can happen if the page navigated away (e.g. meta refresh)
+        # between injection and execution.
         return {'error': 'axe.run() returned null (page may have navigated away)'}
     return results
 
@@ -538,19 +592,23 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         level_label = level_label or 'custom'
 
     # Lower priority so the scan doesn't starve production services.
+    # Chromium is CPU- and memory-hungry; on a shared web server we'd rather
+    # the scan be slow than cause Apache/MySQL to be unresponsive.
     niceness = _safe_int(config.get('niceness', 10), 10)
     oom_score = _safe_int(config.get('oom_score_adj', 1000), 1000)
     if niceness:
         try:
-            os.nice(niceness)
+            os.nice(niceness)  # higher = lower CPU priority (0-19)
         except (OSError, PermissionError):
-            pass
+            pass  # not fatal — just means we run at normal priority
     if oom_score:
         try:
+            # Tell the Linux OOM killer to sacrifice this process first.
+            # 1000 = highest possible score = killed before anything else.
             with open('/proc/self/oom_score_adj', 'w') as f:
                 f.write(str(oom_score))
         except (IOError, PermissionError):
-            pass
+            pass  # not on Linux or no permission — harmless
 
     page_wait = _safe_int(config.get('page_wait', 1), 1)
     axe_source = load_axe_source()
@@ -566,10 +624,12 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         no_crawl = False
     page_count = 0
 
-    # Stream results to a JSONL file (one JSON object per line) instead of
-    # accumulating in memory.  A 5000-page scan would otherwise hold ~500MB+
-    # of Python dicts.  The JSONL file is converted to the final JSON/HTML
-    # at the end or on each incremental flush.
+    # MEMORY STRATEGY: Stream results to a JSONL file (one JSON object per line)
+    # instead of accumulating everything in a Python dict.  Without this, a
+    # 5000-page scan would hold ~500MB+ of results in memory.  By writing each
+    # page's results to disk immediately, memory usage stays constant regardless
+    # of scan size.  The JSONL is later converted to the final JSON/HTML reports
+    # by streaming through the file line-by-line.
     jsonl_path = (json_path + 'l') if json_path else None
     if jsonl_path:
         with open(jsonl_path, 'w'):
@@ -661,9 +721,12 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             if not quiet:
                 print("[{}/{}] Scanning: {}".format(page_count, max_pages, url))
 
-            # Lightweight HTTP status check — error pages get scanned but
-            # their links aren't followed (they typically render site nav
-            # chrome that would fan out the crawl from a dead URL).
+            # Pre-check the HTTP status with a lightweight HEAD request before
+            # launching the full Chromium page load.  We still scan error pages
+            # (they may have a11y issues worth knowing about), but we DON'T
+            # follow their links.  Error pages typically render the site's full
+            # nav chrome, and following those links would cause the crawler to
+            # fan out from dead URLs and waste time on unrelated pages.
             status = http_status(url)
             if status and status >= 400 and not quiet:
                 print("  HTTP {} (error page — scan but skip links)".format(status))
@@ -672,14 +735,22 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 driver.get(url)
                 time.sleep(page_wait)
 
+                # After the page loads, check where Chromium actually ended up.
+                # The server may have redirected us (e.g. HTTP 302).
                 current = driver.current_url
+
+                # Case 1: Redirected to a different domain entirely.
+                # Don't scan it and don't count it toward our page limit.
                 if not is_same_origin(current, base_url):
                     if verbose:
                         print("  REDIRECTED to {}, skipping".format(current[:80]))
                     page_count -= 1
                     continue
 
-                # Detect same-origin redirects (e.g. login wall)
+                # Case 2: Same-origin redirect (e.g. /members → /login).
+                # This often happens with login walls.  We scan the actual
+                # destination but need to avoid scanning it twice if we
+                # encounter the redirect target URL later in the queue.
                 actual_url = normalize_url(current)
                 if actual_url != url:
                     if verbose:
@@ -689,7 +760,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             print("  SKIP: already scanned redirect target")
                         continue
                     visited.add(actual_url)
-                    url = actual_url
+                    url = actual_url  # report results under the actual URL
 
                 # Skip empty/broken pages (e.g. auth walls that render blank)
                 page_html = driver.page_source or ''
@@ -699,7 +770,10 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                     page_count -= 1
                     continue
 
-                # Skip non-HTML responses (JSON/XML endpoints that Chrome wraps)
+                # Skip non-HTML responses.  When Chrome loads a JSON or XML endpoint,
+                # it wraps the content in a minimal HTML shell that doesn't contain
+                # a real <html> tag from the server.  We check the first 80 chars
+                # of the rendered DOM to detect this.
                 page_start = driver.execute_script(
                     "return document.documentElement.outerHTML.substring(0, 80);") or ''
                 if page_start and '<html' not in page_start.lower():
