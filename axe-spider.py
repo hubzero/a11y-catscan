@@ -1796,6 +1796,8 @@ def main():
                         help='Output directory (default: from config or current directory)')
     parser.add_argument('--allowlist', default=None,
                         help='YAML file of known-acceptable incompletes to suppress')
+    parser.add_argument('--driver', default=None, choices=['selenium', 'playwright'],
+                        help='Browser driver: selenium (default) or playwright (~2x faster)')
     parser.add_argument('--workers', type=int, default=None,
                         help='Number of parallel browser instances (default: 1). '
                              'Each uses ~200-500MB RAM. Rate limits are shared.')
@@ -2018,6 +2020,9 @@ OTHER NOTES
     save_every = args.save_every or _safe_int(config.get('save_every', 25), 25)
 
     # Workers: number of parallel browser instances
+    # CLI overrides for config
+    if args.driver:
+        config['driver'] = args.driver
     if args.workers:
         config['workers'] = args.workers
     basename = args.output or 'axe-spider-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
