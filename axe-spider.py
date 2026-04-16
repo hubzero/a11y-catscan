@@ -2508,9 +2508,9 @@ OTHER NOTES
             for v in data.get('violations', []):
                 violation_rules.add(v.get('id', ''))
 
-    avg_time = (total_page_time / scanned) if scanned else 0
-    print("\nScan complete: {} pages in {:.1f}s ({:.1f}s avg/page)".format(
-        scanned, wall_time, avg_time))
+    throughput = (wall_time / scanned) if scanned else 0
+    print("\nScan complete: {} pages in {:.1f}s ({:.1f}s/page)".format(
+        scanned, wall_time, throughput))
     print("  Violations: {} node(s) failing WCAG rules".format(total_violations))
     print("  Incomplete: {} node(s) needing manual review".format(total_incomplete))
 
