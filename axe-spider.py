@@ -161,7 +161,8 @@ def is_same_origin(url, base_url):
     return urlparse(url).netloc == urlparse(base_url).netloc
 
 
-def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None):
+def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None,
+                exclude_query=None):
     if not is_same_origin(url, base_url):
         return False
     parsed = urlparse(url)
@@ -189,6 +190,15 @@ def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None)
     if exclude_regex:
         for pat in exclude_regex:
             if pat.search(path):
+                return False
+
+    # Skip query strings that produce non-HTML output
+    query = parsed.query
+    if 'action=pdf' in query:
+        return False
+    if exclude_query:
+        for q in exclude_query:
+            if q in query:
                 return False
 
     return True
@@ -253,7 +263,7 @@ def run_axe(driver, axe_source, tags=None):
 
 def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
                    include_paths=None, exclude_paths=None, exclude_regex=None,
-                   verbose=False, config=None,
+                   exclude_query=None, verbose=False, config=None,
                    json_path=None, html_path=None, save_every=25,
                    level_label=None):
     """Crawl the site starting from start_url and scan each page with axe-core.
@@ -338,7 +348,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
                 continue
             visited.add(url)
 
-            if not should_scan(url, base_url, include_paths, exclude_paths, exclude_regex):
+            if not should_scan(url, base_url, include_paths, exclude_paths, exclude_regex, exclude_query):
                 continue
 
             page_count += 1
@@ -806,6 +816,9 @@ def main():
     if regex_list and not args.no_default_excludes:
         exclude_regex = [re.compile(p) for p in regex_list]
 
+    # Resolve exclude query strings from config (e.g. action=overview)
+    exclude_query = config.get('exclude_query') if not args.no_default_excludes else None
+
     # Resolve output
     save_every = args.save_every or int(config.get('save_every', 25))
     basename = args.output or 'axe-spider-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
@@ -823,6 +836,7 @@ def main():
         include_paths=include_paths,
         exclude_paths=exclude_paths,
         exclude_regex=exclude_regex,
+        exclude_query=exclude_query,
         verbose=args.verbose,
         config=config,
         json_path=json_path,

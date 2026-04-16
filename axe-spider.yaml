@@ -15,6 +15,10 @@ exclude_paths:
   - /login
   - /api
 
+# Query strings that produce non-HTML output (JSON API, etc.)
+exclude_query:
+  - action=overview
+
 # Chromium / ChromeDriver paths
 chromium_path: /usr/bin/chromium-browser
 chromedriver_path: /usr/bin/chromedriver
