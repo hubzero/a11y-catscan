@@ -6,13 +6,26 @@ Crawls a website and runs axe-core accessibility checks on each page,
 producing HTML and JSON reports.
 
 Usage:
-    python3 axe-spider.py [OPTIONS] START_URL
+    axe-spider.py [OPTIONS] START_URL
 
 Examples:
-    python3 axe-spider.py https://example.com/
-    python3 axe-spider.py --level wcag21aa --max-pages 100 https://example.com/
-    python3 axe-spider.py --config mysite.yaml https://example.com/
-    python3 axe-spider.py --include-path /docs --exclude-path /admin https://example.com/
+    # Full crawl scan
+    axe-spider.py https://example.com/
+    axe-spider.py --max-pages 500 --llm https://example.com/
+
+    # Quick single-page check after a fix
+    axe-spider.py --page -q --summary-json https://example.com/fixed-page
+
+    # Re-scan only pages that failed previously
+    axe-spider.py --rescan previous.jsonl --diff previous.jsonl --llm
+
+    # Check just contrast issues
+    axe-spider.py --page --rule color-contrast https://example.com/page
+
+    # Scan a specific list of URLs
+    axe-spider.py --urls pages.txt --llm
+
+Exit codes: 0 = no violations, 1 = violations found.
 """
 
 import argparse
@@ -1242,10 +1255,84 @@ def main():
                         help='Print a one-line JSON summary to stdout (machine-parseable)')
     parser.add_argument('-q', '--quiet', action='store_true',
                         help='Suppress per-page output, only show final summary')
+    parser.add_argument('--help-audit', action='store_true',
+                        help='Print a guide for using this tool to perform a WCAG audit')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Verbose output')
 
     args = parser.parse_args()
+
+    if args.help_audit:
+        print("""
+WCAG Accessibility Audit Guide
+===============================
+
+You are a WCAG accessibility auditor. Use axe-spider to scan websites for
+WCAG 2.1 AA compliance violations and then fix them in the source code.
+
+AUDIT WORKFLOW
+--------------
+1. SCAN: Run a full crawl to establish a baseline.
+     axe-spider.py --max-pages 500 --llm https://example.com/
+   Read the .md (LLM report) for a concise summary of issues.
+
+2. PRIORITIZE: Fix violations first (WCAG failures), then incompletes.
+   Violations are grouped by rule — fix the rule with the most instances
+   first for maximum impact.
+
+3. FIX: For each violation, find the template/CSS that generates the
+   flagged HTML. Common fixes:
+   - color-contrast: darken text or lighten background to reach 4.5:1
+   - missing alt text: add descriptive alt attributes to images
+   - missing labels: add <label> or aria-label to form controls
+   - empty headings/links: add text content or aria-label
+   - focus visible: add :focus outline styles
+
+4. VERIFY: After each fix, re-check the specific page:
+     axe-spider.py --page -q --summary-json https://example.com/fixed-page
+   Check exit code: 0 = clean, 1 = still has violations.
+
+5. REGRESSION CHECK: Re-scan previous failures to confirm fixes:
+     axe-spider.py --rescan baseline.jsonl --diff baseline.jsonl --llm
+   The diff shows what was fixed vs what's new vs what remains.
+
+6. SUPPRESS KNOWN ISSUES: For axe-core limitations that aren't real
+   accessibility problems (e.g. can't compute contrast on gradients),
+   add entries to an allowlist.yaml:
+     - rule: color-contrast
+       url: /homepage
+       reason: axe-core flex layout measurement limitation
+
+UNDERSTANDING RESULTS
+---------------------
+- VIOLATIONS: Definite WCAG failures. Must be fixed.
+- INCOMPLETE: axe-core couldn't auto-verify. May be real issues or
+  false positives. Common causes: background gradients, images, pseudo-
+  elements blocking contrast computation, elements outside viewport.
+- PASSES: Rules that were checked and satisfied.
+
+COMMON AXE-CORE INCOMPLETE TYPES (usually not real issues):
+- bgOverlap/elmPartiallyObscured: flex/scroll layout measurement artifacts
+- pseudoContent: CSS ::before/::after blocking contrast computation
+- bgGradient/bgImage: background-image preventing contrast resolution
+  Fix: set explicit background-color on text elements
+- shortTextContent: single-character text (e.g. x delete buttons)
+  Fix: move character to CSS ::after, leave element empty
+- nonBmp: icon font glyphs axe can't evaluate
+  Fix: move icon character to CSS ::after on aria-hidden elements
+
+KEY FLAGS FOR LLM WORKFLOWS
+----------------------------
+--page              Scan one URL, no crawling (fast verify after a fix)
+--rule NAME         Check only specific rules (fast, focused)
+--summary-json      Machine-parseable one-line JSON output
+--llm               Generate compact markdown report (~300 tokens vs 300K)
+--diff PREV.jsonl   Show what changed since last scan
+--rescan PREV.jsonl Only re-scan pages that previously had issues
+--allowlist FILE    Suppress known-acceptable incompletes
+-q                  Quiet — suppress per-page noise, show only summary
+""")
+        sys.exit(0)
 
     # Load config
     config = load_config(args.config)
