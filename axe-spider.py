@@ -1122,10 +1122,11 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                         print("[{}/{}] {} — {} ({:.1f}s)".format(
                             str(page_count).rjust(page_width), max_pages,
                             url, status_str, elapsed))
-                        if verbose and (v_count or i_count):
-                            print("  Violations: {} ({} nodes), Incomplete: {} ({} nodes)".format(
+                        if verbose:
+                            print("  Violations: {} ({} nodes), Incomplete: {} ({} nodes), Queue: {}".format(
                                 len(page_data['violations']), v_count,
-                                len(page_data['incomplete']), i_count))
+                                len(page_data['incomplete']), i_count,
+                                len(queue)))
 
                     _write_page(url, page_data)
 
