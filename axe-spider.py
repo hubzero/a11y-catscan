@@ -428,6 +428,7 @@ class RateLimiter:
         self._last_time = 0
 
     def wait(self):
+        """Block (synchronous) until the rate limit allows the next request."""
         if self.min_interval <= 0:
             return
         with self._lock:
@@ -436,6 +437,17 @@ class RateLimiter:
             if elapsed < self.min_interval:
                 time.sleep(self.min_interval - elapsed)
             self._last_time = time.time()
+
+    def wait_time(self):
+        """Return seconds to sleep (for async callers that need asyncio.sleep)."""
+        if self.min_interval <= 0:
+            return 0
+        with self._lock:
+            now = time.time()
+            elapsed = now - self._last_time
+            delay = max(0, self.min_interval - elapsed)
+            self._last_time = now + delay
+            return delay
 
 
 # ---------------------------------------------------------------------------
@@ -1274,14 +1286,26 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                     except Exception:
                         pass
 
-                    async def _scan(url):
+                    async def _scan(url, worker_id=0,
+                                    skip_rate_limit=False):
                         """Scan one URL — mirrors _scan_one_page."""
-                        status = http_status(url)
+                        # Run blocking HTTP check in a thread so it
+                        # doesn't freeze the async event loop
+                        loop = asyncio.get_event_loop()
+                        status = await loop.run_in_executor(
+                            None, http_status, url)
                         page = await browser.new_page(
                             viewport={'width': 1280, 'height': 1024},
                             ignore_https_errors=ignore_certs)
                         try:
-                            rate_limiter.wait()
+                            # Rate limit: async sleep so we don't block
+                            # the event loop.  Skipped on initial
+                            # staggered starts (stagger already spaces
+                            # the requests correctly).
+                            if not skip_rate_limit:
+                                delay = rate_limiter.wait_time()
+                                if delay > 0:
+                                    await asyncio.sleep(delay)
                             await page.goto(url, wait_until='load')
                             await page.wait_for_timeout(
                                 page_wait * 1000)
@@ -1344,7 +1368,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                     results.get('passes', []),
                                 'inapplicable':
                                     results.get('inapplicable', []),
-                            }, new_links)
+                            }, new_links, worker_id)
                         except Exception:
                             return None
                         finally:
@@ -1364,21 +1388,34 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                 return url
                         return None
 
-                    # Fill initial window with staggered starts
+                    # Fill initial window with staggered starts.
+                    # Worker IDs start at 1 for display.
                     pending = {}
-                    stagger = page_wait / max(num_workers, 1)
+                    next_worker_id = 1
+                    # Stagger initial starts by the crawl delay (not
+                    # page_wait) so each worker's first request is
+                    # spaced at the rate limit interval.
+                    stagger = max(crawl_delay, 1) if crawl_delay else (
+                        page_wait / max(num_workers, 1))
+
+                    def _make_staggered(u, delay, w):
+                        """Factory to avoid closure capture bug."""
+
+                        async def _task():
+                            if delay > 0:
+                                await asyncio.sleep(delay)
+                            return await _scan(
+                                u, worker_id=w, skip_rate_limit=True)
+                        return _task
+
                     for i in range(num_workers):
                         url = _next_url()
                         if url is None or page_count >= max_pages:
                             break
-
-                        async def _staggered(u, delay):
-                            if delay > 0:
-                                await asyncio.sleep(delay)
-                            return await _scan(u)
-
+                        wid = next_worker_id
+                        next_worker_id += 1
                         task = asyncio.create_task(
-                            _staggered(url, i * stagger))
+                            _make_staggered(url, i * stagger, wid)())
                         pending[task] = url
 
                     # Sliding window: as each finishes, print and
@@ -1398,7 +1435,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                 pass
 
                             if result is not None:
-                                url, page_data, new_links = result
+                                url, page_data, new_links, wid = result
                                 v_count = _count_nodes(
                                     page_data.get('violations', []))
                                 i_count = _count_nodes(
@@ -1416,24 +1453,26 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                                 i_count))
                                     ss = (', '.join(parts)
                                           if parts else 'clean')
-                                    print("[{}/{}] {} — {}".format(
+                                    # Show worker ID when parallel
+                                    print("[{}/{}] W{} {} — {}".format(
                                         str(page_count).rjust(pw_w),
-                                        max_pages, url, ss))
+                                        max_pages, wid, url, ss))
                                 _write_page(url, page_data)
                                 for link in new_links:
                                     if (link not in visited
                                             and link not in queue):
                                         queue.append(link)
+
+                                # Refill: reuse this worker's ID
+                                if page_count < max_pages:
+                                    next_url = _next_url()
+                                    if next_url:
+                                        t = asyncio.create_task(
+                                            _scan(next_url,
+                                                  worker_id=wid))
+                                        pending[t] = next_url
                             else:
                                 page_count -= 1
-
-                            # Refill window
-                            if page_count < max_pages:
-                                next_url = _next_url()
-                                if next_url:
-                                    t = asyncio.create_task(
-                                        _scan(next_url))
-                                    pending[t] = next_url
 
                         if (json_path and save_every
                                 and page_count % save_every == 0):
