@@ -41,11 +41,17 @@ from collections import deque
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import (
-    TimeoutException, WebDriverException,
-)
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.common.exceptions import (
+        TimeoutException, WebDriverException,
+    )
+except ImportError:
+    print("ERROR: selenium is not installed.", file=sys.stderr)
+    print("  Install it with:  pip install selenium", file=sys.stderr)
+    print("  (Python 3.7+ required for Selenium 4)", file=sys.stderr)
+    sys.exit(2)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AXE_JS_PATH = os.path.join(SCRIPT_DIR, 'axe.min.js')
@@ -288,8 +294,21 @@ def load_axe_source():
 
 def create_driver(config=None):
     config = config or {}
+
+    # Pre-flight checks — catch missing binaries before Selenium's cryptic errors
+    chromium = config.get('chromium_path', '/usr/bin/chromium-browser')
+    chromedriver = config.get('chromedriver_path', '/usr/bin/chromedriver')
+    if not os.path.isfile(chromium):
+        print("ERROR: Chromium not found at: {}".format(chromium), file=sys.stderr)
+        print("  Install it or set chromium_path in axe-spider.yaml", file=sys.stderr)
+        sys.exit(2)
+    if not os.path.isfile(chromedriver):
+        print("ERROR: ChromeDriver not found at: {}".format(chromedriver), file=sys.stderr)
+        print("  Install it or set chromedriver_path in axe-spider.yaml", file=sys.stderr)
+        sys.exit(2)
+
     opts = Options()
-    opts.binary_location = config.get('chromium_path', '/usr/bin/chromium-browser')
+    opts.binary_location = chromium
     opts.add_argument('--headless')
     opts.add_argument('--no-sandbox')
     opts.add_argument('--disable-dev-shm-usage')
@@ -307,7 +326,6 @@ def create_driver(config=None):
     }
     opts.add_experimental_option('prefs', prefs)
 
-    chromedriver = config.get('chromedriver_path', '/usr/bin/chromedriver')
     try:
         try:
             from selenium.webdriver.chrome.service import Service
@@ -315,14 +333,12 @@ def create_driver(config=None):
         except (ImportError, TypeError):
             driver = webdriver.Chrome(executable_path=chromedriver, options=opts)
     except WebDriverException as e:
-        msg = str(e)[:200]
         print("ERROR: Could not start browser.", file=sys.stderr)
-        if 'chromedriver' in msg.lower() or 'cannot find' in msg.lower():
-            print("  ChromeDriver not found at: {}".format(chromedriver), file=sys.stderr)
-        if 'chrome' in msg.lower() and 'not found' in msg.lower():
-            print("  Chromium not found at: {}".format(
-                config.get('chromium_path', '/usr/bin/chromium-browser')), file=sys.stderr)
-        print("  Detail: {}".format(msg), file=sys.stderr)
+        # Extract just the useful message, skip Selenium's long doc URLs
+        msg = str(e).split('\n')[0][:200]
+        print("  {}".format(msg), file=sys.stderr)
+        print("  Chromium: {}  ChromeDriver: {}".format(chromium, chromedriver),
+              file=sys.stderr)
         sys.exit(2)
     driver.set_page_load_timeout(30)
     driver.set_script_timeout(120)
