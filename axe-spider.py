@@ -57,6 +57,15 @@ WCAG_LEVELS = {
 }
 DEFAULT_LEVEL = 'wcag21aa'
 
+
+def _safe_int(val, default=0):
+    """Convert to int, returning default on failure."""
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
 # WCAG success criteria names (subset — covers all criteria axe-core tests)
 WCAG_SC_NAMES = {
     '1.1.1': 'Non-text Content',
@@ -426,8 +435,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         level_label = level_label or 'custom'
 
     # Lower priority so the scan doesn't starve production services.
-    niceness = int(config.get('niceness', 10))
-    oom_score = int(config.get('oom_score_adj', 1000))
+    niceness = _safe_int(config.get('niceness', 10), 10)
+    oom_score = _safe_int(config.get('oom_score_adj', 1000), 1000)
     if niceness:
         try:
             os.nice(niceness)
@@ -440,7 +449,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         except (IOError, PermissionError):
             pass
 
-    page_wait = int(config.get('page_wait', 1))
+    page_wait = _safe_int(config.get('page_wait', 1), 1)
     axe_source = load_axe_source()
     driver = create_driver(config)
     base_url = start_url
@@ -516,7 +525,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         except Exception as e:
             print('  (flush failed: {})'.format(str(e)[:80]))
 
-    # SIGTERM/SIGINT handler: flush partial results before exit
+    # SIGTERM/SIGINT handler: flush partial results, quit driver, exit
     _interrupted = {'flag': False}
     def _on_signal(signum, frame):
         if _interrupted['flag']:
@@ -524,6 +533,11 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         _interrupted['flag'] = True
         print('\n!! Signal {} — flushing {} pages...'.format(signum, page_count))
         _flush(reason='signal {}'.format(signum))
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        sys.exit(128 + signum)
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
@@ -574,7 +588,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 # Skip empty/broken pages (e.g. auth walls that render blank)
                 page_html = driver.page_source or ''
                 if len(page_html) < 100:
-                    print("  Empty page ({} bytes), skipping".format(len(page_html)))
+                    if not quiet:
+                        print("  Empty page ({} bytes), skipping".format(len(page_html)))
                     page_count -= 1
                     continue
 
@@ -582,7 +597,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 page_start = driver.execute_script(
                     "return document.documentElement.outerHTML.substring(0, 80);") or ''
                 if page_start and '<html' not in page_start.lower():
-                    print("  SKIP: non-HTML response")
+                    if not quiet:
+                        print("  SKIP: non-HTML response")
                     page_count -= 1
                     continue
 
@@ -632,7 +648,10 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 _flush()
 
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+        except Exception:
+            pass
         _flush(reason='final')
 
     return page_count, jsonl_path
@@ -954,7 +973,8 @@ def _esc(text):
             .replace('&', '&amp;')
             .replace('<', '&lt;')
             .replace('>', '&gt;')
-            .replace('"', '&quot;'))
+            .replace('"', '&quot;')
+            .replace("'", '&#39;'))
 
 
 def _render_nodes_html(nodes, limit=20, snippet_max=500):
@@ -1271,7 +1291,7 @@ def main():
     elif seed_urls:
         max_pages = len(seed_urls)
     else:
-        max_pages = args.max_pages or int(config.get('max_pages', 50))
+        max_pages = args.max_pages or _safe_int(config.get('max_pages', 50), 50)
 
     # Resolve exclude paths: config defaults + CLI additions
     exclude_paths = []
@@ -1295,7 +1315,7 @@ def main():
     exclude_query = config.get('exclude_query') if not args.no_default_excludes else None
 
     # Resolve output
-    save_every = args.save_every or int(config.get('save_every', 25))
+    save_every = args.save_every or _safe_int(config.get('save_every', 25), 25)
     basename = args.output or 'axe-spider-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
     output_dir = args.output_dir or config.get('output_dir', os.getcwd())
     os.makedirs(output_dir, exist_ok=True)
