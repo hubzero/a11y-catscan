@@ -531,55 +531,74 @@ class PlaywrightBrowser:
     """Browser driver backed by Playwright (faster, no chromedriver needed).
 
     Install: pip install playwright && playwright install chromium
+
+    For parallel workers, one PlaywrightBrowser owns the Playwright instance
+    and browser process.  Additional workers call new_page() to get a
+    lightweight sibling that shares the same browser but has its own page.
     """
 
-    def __init__(self, config):
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            print("ERROR: playwright is not installed.", file=sys.stderr)
-            print("  Install it with:", file=sys.stderr)
-            print("    pip install playwright", file=sys.stderr)
-            print("    playwright install chromium", file=sys.stderr)
-            sys.exit(2)
-
-        self._pw = sync_playwright().start()
-
-        # Build launch arguments similar to our Selenium config
-        launch_args = [
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-        ]
-        ignore_certs = config.get('ignore_certificate_errors') in (
+    def __init__(self, config, _shared_browser=None, _shared_pw=None):
+        self._owns_browser = (_shared_browser is None)
+        self._ignore_certs = config.get('ignore_certificate_errors') in (
             True, 'true', 'yes', '1')
 
-        # Playwright manages its own Chromium binary, but if a custom path
-        # is set in config, use it instead.
-        chromium_path = config.get('chromium_path')
-        if chromium_path and os.path.isfile(chromium_path):
-            self._browser = self._pw.chromium.launch(
-                headless=True,
-                executable_path=chromium_path,
-                args=launch_args,
-            )
+        if self._owns_browser:
+            # First instance — start Playwright and launch the browser
+            try:
+                from playwright.sync_api import sync_playwright
+            except ImportError:
+                print("ERROR: playwright is not installed.", file=sys.stderr)
+                print("  Install it with:", file=sys.stderr)
+                print("    pip install playwright", file=sys.stderr)
+                print("    playwright install chromium", file=sys.stderr)
+                sys.exit(2)
+
+            self._pw = sync_playwright().start()
+            launch_args = [
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+            ]
+            chromium_path = config.get('chromium_path')
+            if chromium_path and os.path.isfile(chromium_path):
+                self._browser = self._pw.chromium.launch(
+                    headless=True,
+                    executable_path=chromium_path,
+                    args=launch_args,
+                )
+            else:
+                self._browser = self._pw.chromium.launch(
+                    headless=True,
+                    args=launch_args,
+                )
+            try:
+                pid = self._browser.process.pid
+                _register_browser_pid(pid)
+            except Exception:
+                pass
         else:
-            self._browser = self._pw.chromium.launch(
-                headless=True,
-                args=launch_args,
-            )
+            # Additional worker — share the existing browser, just make a new page
+            self._pw = _shared_pw
+            self._browser = _shared_browser
 
         self._page = self._browser.new_page(
             viewport={'width': 1280, 'height': 1024},
-            ignore_https_errors=ignore_certs,
+            ignore_https_errors=self._ignore_certs,
         )
         self._page.set_default_timeout(30000)
         self._page.set_default_navigation_timeout(30000)
-        # Track the browser process PID for cleanup on exit
-        try:
-            pid = self._browser.process.pid
-            _register_browser_pid(pid)
-        except Exception:
-            pass
+        self._config = config
+
+    def new_page(self):
+        """Create a sibling browser instance sharing the same browser process.
+
+        Used for parallel workers — each gets its own page but they share
+        one Chromium process (much lighter than separate processes).
+        """
+        return PlaywrightBrowser(
+            self._config,
+            _shared_browser=self._browser,
+            _shared_pw=self._pw,
+        )
 
     def navigate(self, url):
         self._page.goto(url, wait_until='load')
@@ -623,19 +642,119 @@ class PlaywrightBrowser:
             args
         )
 
+    def scan_batch(self, urls, axe_source, tags, rules, page_wait, rate_limiter):
+        """Scan multiple URLs concurrently using Playwright's async API.
+
+        Creates a temporary page per URL, runs them all in parallel via
+        asyncio.gather, returns list of (url, page_data, new_links) tuples.
+        Much faster than scanning serially because page loads overlap.
+        """
+        import asyncio
+
+        async def _scan_one(browser_ctx, url, axe_src, run_opts, pw):
+            """Scan a single URL in an async context."""
+            page = await browser_ctx.new_page(
+                viewport={'width': 1280, 'height': 1024},
+                ignore_https_errors=self._ignore_certs,
+            )
+            try:
+                rate_limiter.wait()
+                await page.goto(url, wait_until='load')
+                await page.wait_for_timeout(page_wait * 1000)
+
+                current = page.url
+                actual_url = normalize_url(current)
+
+                # Skip empty pages
+                content = await page.content()
+                if len(content or '') < 100:
+                    return None
+
+                # Inject axe-core
+                await page.add_script_tag(content=axe_src)
+
+                # Run axe
+                results = await page.evaluate(
+                    """(opts) => {
+                        return axe.run(document, opts).catch(err => {
+                            return {error: err.toString()};
+                        });
+                    }""",
+                    run_opts
+                )
+                if results is None or 'error' in results:
+                    return None
+
+                # Extract links
+                links = await page.evaluate(
+                    "Array.from(document.querySelectorAll('a[href]'))"
+                    ".map(a => a.href)"
+                    ".filter(h => h.startsWith('http'))"
+                )
+                new_links = [normalize_url(lnk) for lnk in (links or []) if lnk]
+
+                page_data = {
+                    'url': actual_url,
+                    'timestamp': datetime.now().isoformat(),
+                    'http_status': None,
+                    'violations': results.get('violations', []),
+                    'incomplete': results.get('incomplete', []),
+                    'passes': results.get('passes', []),
+                    'inapplicable': results.get('inapplicable', []),
+                }
+                return (actual_url, page_data, new_links)
+            except Exception:
+                return None
+            finally:
+                await page.close()
+
+        async def _run_batch(urls_batch):
+            from playwright.async_api import async_playwright
+            async with async_playwright() as pw:
+                launch_args = ['--disable-dev-shm-usage', '--disable-gpu']
+                chromium_path = self._config.get('chromium_path')
+                if chromium_path and os.path.isfile(chromium_path):
+                    browser = await pw.chromium.launch(
+                        headless=True, executable_path=chromium_path,
+                        args=launch_args)
+                else:
+                    browser = await pw.chromium.launch(
+                        headless=True, args=launch_args)
+
+                run_opts = {}
+                if rules:
+                    run_opts['runOnly'] = {'type': 'rule', 'values': rules}
+                elif tags:
+                    run_opts['runOnly'] = {'type': 'tag', 'values': tags}
+
+                ctx = await browser.new_context()
+                tasks = [_scan_one(ctx, u, axe_source, run_opts, pw)
+                         for u in urls_batch]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                await ctx.close()
+                await browser.close()
+
+                # Filter out exceptions and Nones
+                return [r for r in results
+                        if r is not None and not isinstance(r, Exception)]
+
+        # Run the async batch from synchronous code
+        return asyncio.run(_run_batch(urls))
+
     def quit(self):
         try:
             self._page.close()
         except Exception:
             pass
-        try:
-            self._browser.close()
-        except Exception:
-            pass
-        try:
-            self._pw.stop()
-        except Exception:
-            pass
+        if self._owns_browser:
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
 
 
 def create_browser(config=None):
@@ -870,7 +989,17 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
 
     page_wait = _safe_int(config.get('page_wait', 1), 1)
     axe_source = load_axe_source()
-    driver = create_browser(config)
+    num_workers = _safe_int(config.get('workers', 1), 1)
+    driver_type = config.get('driver', 'selenium').lower()
+
+    # For Playwright with multiple workers, we skip creating the sync browser
+    # entirely and go straight to async batch mode (sync and async Playwright
+    # can't coexist in the same process).
+    use_playwright_async = (driver_type == 'playwright' and num_workers > 1)
+    if use_playwright_async:
+        driver = None  # no sync browser — scan_batch creates its own async one
+    else:
+        driver = create_browser(config)
     base_url = start_url
 
     visited = set()
@@ -946,11 +1075,6 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 print('  [flushed {} pages ({})]'.format(page_count, reason))
         except Exception as e:
             print('  (flush failed: {})'.format(str(e)[:80]))
-
-    # How many browser instances to run in parallel.  Each gets its own
-    # Chromium process (~200-500MB), so don't set this too high on
-    # memory-constrained servers.
-    num_workers = _safe_int(config.get('workers', 1), 1)
 
     # Rate limiter shared across all workers to enforce robots.txt crawl delay.
     # This is separate from page_wait (which is per-worker JS settle time).
@@ -1053,10 +1177,14 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
-    # Create browser pool — one per worker
-    browsers = [driver]
-    for _ in range(num_workers - 1):
-        browsers.append(create_browser(config))
+    # Create browser pool.
+    # Selenium: one chromedriver + Chromium per worker (~300MB each).
+    # Playwright async mode: handled separately in the crawl loop below.
+    is_playwright = (driver_type == 'playwright')
+    browsers = [driver] if driver else []
+    if not is_playwright and num_workers > 1:
+        for _ in range(num_workers - 1):
+            browsers.append(create_browser(config))
 
     if not quiet and num_workers > 1:
         print("  Workers: {} (parallel)".format(num_workers))
@@ -1109,12 +1237,175 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 if json_path and save_every and page_count % save_every == 0:
                     _flush()
 
+        elif is_playwright and num_workers > 1:
+            # --- Playwright parallel: async pages in one browser ---
+            import asyncio
+
+            async def _pw_scan_batch(urls_batch, axe_src, run_opts, cfg,
+                                     pw_time, visited_set, base):
+                """Scan a batch of URLs concurrently with async Playwright."""
+                from playwright.async_api import async_playwright
+                async with async_playwright() as pw:
+                    launch_args = ['--disable-dev-shm-usage', '--disable-gpu']
+                    chromium_path = cfg.get('chromium_path')
+                    ignore_certs = cfg.get('ignore_certificate_errors') in (
+                        True, 'true', 'yes', '1')
+                    if chromium_path and os.path.isfile(chromium_path):
+                        browser = await pw.chromium.launch(
+                            headless=True, executable_path=chromium_path,
+                            args=launch_args)
+                    else:
+                        browser = await pw.chromium.launch(
+                            headless=True, args=launch_args)
+
+                    async def _one(url):
+                        """Scan one URL — mirrors _scan_one_page logic."""
+                        # HTTP pre-check (same as serial mode)
+                        status = http_status(url)
+
+                        page = await browser.new_page(
+                            viewport={'width': 1280, 'height': 1024},
+                            ignore_https_errors=ignore_certs)
+                        try:
+                            rate_limiter.wait()
+                            await page.goto(url, wait_until='load')
+                            await page.wait_for_timeout(pw_time * 1000)
+
+                            # Check for redirects (same as serial mode)
+                            current = page.url
+                            if not is_same_origin(current, base):
+                                return None
+
+                            actual = normalize_url(current)
+                            if actual != url:
+                                if actual in visited_set:
+                                    return None
+                                visited_set.add(actual)
+
+                            # Skip empty pages
+                            content = await page.content()
+                            if len(content or '') < 100:
+                                return None
+
+                            # Skip non-HTML responses (same as serial mode)
+                            page_start = await page.evaluate(
+                                "document.documentElement.outerHTML"
+                                ".substring(0, 80)")
+                            if page_start and '<html' not in (
+                                    page_start or '').lower():
+                                return None
+
+                            # Inject axe-core and run
+                            await page.add_script_tag(content=axe_src)
+                            results = await page.evaluate(
+                                """(opts) => {
+                                    return axe.run(document, opts)
+                                        .catch(e => ({error: e.toString()}));
+                                }""", run_opts)
+                            if not results or 'error' in results:
+                                return None
+
+                            # Extract links (skip for error pages,
+                            # same as serial mode)
+                            new_links = []
+                            is_ok = (status == 0 or status < 400)
+                            if not no_crawl and is_ok:
+                                links = await page.evaluate(
+                                    "Array.from(document.querySelectorAll("
+                                    "'a[href]')).map(a=>a.href)"
+                                    ".filter(h=>h.startsWith('http'))")
+                                new_links = [normalize_url(lnk)
+                                             for lnk in (links or []) if lnk]
+
+                            return (actual, {
+                                'url': actual,
+                                'timestamp': datetime.now().isoformat(),
+                                'http_status': (status if status != 0
+                                                else None),
+                                'violations': results.get('violations', []),
+                                'incomplete': results.get('incomplete', []),
+                                'passes': results.get('passes', []),
+                                'inapplicable': results.get(
+                                    'inapplicable', []),
+                            }, new_links)
+                        except Exception:
+                            return None
+                        finally:
+                            await page.close()
+
+                    tasks = [_one(u) for u in urls_batch]
+                    raw = await asyncio.gather(
+                        *tasks, return_exceptions=True)
+                    await browser.close()
+                    return [r for r in raw
+                            if r is not None and not isinstance(r, Exception)]
+
+            # Build axe run options
+            run_opts = {}
+            if rules:
+                run_opts['runOnly'] = {'type': 'rule', 'values': rules}
+            elif tags:
+                run_opts['runOnly'] = {'type': 'tag', 'values': tags}
+
+            while queue and page_count < max_pages and not interrupted:
+                batch = []
+                while queue and len(batch) < num_workers and \
+                        page_count + len(batch) < max_pages:
+                    url = queue.popleft()
+                    if url in visited:
+                        continue
+                    visited.add(url)
+                    if not should_scan(url, base_url, include_paths,
+                                       exclude_paths, exclude_regex,
+                                       exclude_query, robots_parser):
+                        continue
+                    batch.append(url)
+
+                if not batch:
+                    break
+
+                batch_results = asyncio.run(
+                    _pw_scan_batch(batch, axe_source, run_opts,
+                                   config, page_wait, visited, base_url))
+
+                # Deduplicate batch results — two URLs in the same batch
+                # may have redirected to the same page
+                seen_in_batch = set()
+                for url, page_data, new_links in batch_results:
+                    if url in seen_in_batch:
+                        continue
+                    seen_in_batch.add(url)
+                    page_count += 1
+                    v_count = _count_nodes(page_data.get('violations', []))
+                    i_count = _count_nodes(page_data.get('incomplete', []))
+
+                    if not quiet:
+                        page_width = len(str(max_pages))
+                        parts = []
+                        if v_count:
+                            parts.append('{} violations'.format(v_count))
+                        if i_count:
+                            parts.append('{} incomplete'.format(i_count))
+                        status_str = ', '.join(parts) if parts else 'clean'
+                        print("[{}/{}] {} — {}".format(
+                            str(page_count).rjust(page_width),
+                            max_pages, url, status_str))
+
+                    _write_page(url, page_data)
+
+                    if not no_crawl:
+                        for link in new_links:
+                            if link not in visited and link not in queue:
+                                queue.append(link)
+
+                if json_path and save_every and \
+                        page_count % save_every == 0:
+                    _flush()
+
         else:
-            # --- Parallel mode: thread pool with shared queue ---
+            # --- Selenium parallel: thread pool with separate browsers ---
             with ThreadPoolExecutor(max_workers=num_workers) as pool:
-                while (queue or pool._work_queue.qsize() > 0) and \
-                        page_count < max_pages and not interrupted:
-                    # Submit a batch of URLs to workers
+                while queue and page_count < max_pages and not interrupted:
                     futures = {}
                     while queue and len(futures) < num_workers and \
                             page_count + len(futures) < max_pages:
@@ -1126,7 +1417,6 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                            exclude_paths, exclude_regex,
                                            exclude_query, robots_parser):
                             continue
-                        # Round-robin browser assignment
                         browser_idx = len(futures) % num_workers
                         future = pool.submit(
                             _scan_one_page, browsers[browser_idx], url)
@@ -1135,7 +1425,6 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                     if not futures:
                         break
 
-                    # Collect results as they complete
                     for future in as_completed(futures):
                         page_count += 1
                         result = future.result()
