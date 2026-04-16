@@ -403,7 +403,7 @@ def _cleanup_browsers():
                     parent_pid = int(parts[1])
                     comm = parts[2]
                     if parent_pid == my_pid and (
-                            'chrome' in comm or 'chromedriver' in comm):
+                            'chrome' in comm):
                         os.kill(child_pid, signal.SIGKILL)
                 except (ValueError, ProcessLookupError, PermissionError):
                     pass
@@ -1238,58 +1238,67 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                     _flush()
 
         elif is_playwright and num_workers > 1:
-            # --- Playwright parallel: async pages in one browser ---
+            # --- Playwright parallel: async sliding window ---
+            # Instead of batching (which returns all at once), we maintain
+            # a sliding window of N concurrent async tasks.  As each task
+            # finishes, we print its result immediately and start the next.
             import asyncio
 
-            async def _pw_scan_batch(urls_batch, axe_src, run_opts, cfg,
-                                     pw_time, visited_set, base):
-                """Scan a batch of URLs concurrently with async Playwright."""
+            run_opts = {}
+            if rules:
+                run_opts['runOnly'] = {'type': 'rule', 'values': rules}
+            elif tags:
+                run_opts['runOnly'] = {'type': 'tag', 'values': tags}
+
+            async def _pw_sliding_window():
+                nonlocal page_count
                 from playwright.async_api import async_playwright
                 async with async_playwright() as pw:
-                    launch_args = ['--disable-dev-shm-usage', '--disable-gpu']
-                    chromium_path = cfg.get('chromium_path')
-                    ignore_certs = cfg.get('ignore_certificate_errors') in (
+                    launch_args = [
+                        '--disable-dev-shm-usage', '--disable-gpu']
+                    chromium_path = config.get('chromium_path')
+                    ignore_certs = config.get(
+                        'ignore_certificate_errors') in (
                         True, 'true', 'yes', '1')
                     if chromium_path and os.path.isfile(chromium_path):
                         browser = await pw.chromium.launch(
-                            headless=True, executable_path=chromium_path,
+                            headless=True,
+                            executable_path=chromium_path,
                             args=launch_args)
                     else:
                         browser = await pw.chromium.launch(
                             headless=True, args=launch_args)
 
-                    async def _one(url, stagger_delay=0):
-                        """Scan one URL — mirrors _scan_one_page logic."""
-                        if stagger_delay > 0:
-                            await asyncio.sleep(stagger_delay)
-                        # HTTP pre-check (same as serial mode)
-                        status = http_status(url)
+                    try:
+                        _register_browser_pid(browser.process.pid)
+                    except Exception:
+                        pass
 
+                    async def _scan(url):
+                        """Scan one URL — mirrors _scan_one_page."""
+                        status = http_status(url)
                         page = await browser.new_page(
                             viewport={'width': 1280, 'height': 1024},
                             ignore_https_errors=ignore_certs)
                         try:
                             rate_limiter.wait()
                             await page.goto(url, wait_until='load')
-                            await page.wait_for_timeout(pw_time * 1000)
+                            await page.wait_for_timeout(
+                                page_wait * 1000)
 
-                            # Check for redirects (same as serial mode)
                             current = page.url
-                            if not is_same_origin(current, base):
+                            if not is_same_origin(current, base_url):
                                 return None
-
                             actual = normalize_url(current)
                             if actual != url:
-                                if actual in visited_set:
+                                if actual in visited:
                                     return None
-                                visited_set.add(actual)
+                                visited.add(actual)
 
-                            # Skip empty pages
                             content = await page.content()
                             if len(content or '') < 100:
                                 return None
 
-                            # Skip non-HTML responses (same as serial mode)
                             page_start = await page.evaluate(
                                 "document.documentElement.outerHTML"
                                 ".substring(0, 80)")
@@ -1297,116 +1306,145 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                     page_start or '').lower():
                                 return None
 
-                            # Inject axe-core and run
-                            await page.add_script_tag(content=axe_src)
+                            await page.add_script_tag(
+                                content=axe_source)
                             results = await page.evaluate(
                                 """(opts) => {
                                     return axe.run(document, opts)
-                                        .catch(e => ({error: e.toString()}));
+                                        .catch(e => (
+                                            {error: e.toString()}));
                                 }""", run_opts)
                             if not results or 'error' in results:
                                 return None
 
-                            # Extract links (skip for error pages,
-                            # same as serial mode)
                             new_links = []
                             is_ok = (status == 0 or status < 400)
                             if not no_crawl and is_ok:
                                 links = await page.evaluate(
-                                    "Array.from(document.querySelectorAll("
-                                    "'a[href]')).map(a=>a.href)"
-                                    ".filter(h=>h.startsWith('http'))")
-                                new_links = [normalize_url(lnk)
-                                             for lnk in (links or []) if lnk]
+                                    "Array.from(document"
+                                    ".querySelectorAll('a[href]'))"
+                                    ".map(a=>a.href)"
+                                    ".filter(h=>"
+                                    "h.startsWith('http'))")
+                                new_links = [
+                                    normalize_url(lnk)
+                                    for lnk in (links or []) if lnk]
 
                             return (actual, {
                                 'url': actual,
-                                'timestamp': datetime.now().isoformat(),
-                                'http_status': (status if status != 0
-                                                else None),
-                                'violations': results.get('violations', []),
-                                'incomplete': results.get('incomplete', []),
-                                'passes': results.get('passes', []),
-                                'inapplicable': results.get(
-                                    'inapplicable', []),
+                                'timestamp':
+                                    datetime.now().isoformat(),
+                                'http_status': (
+                                    status if status != 0 else None),
+                                'violations':
+                                    results.get('violations', []),
+                                'incomplete':
+                                    results.get('incomplete', []),
+                                'passes':
+                                    results.get('passes', []),
+                                'inapplicable':
+                                    results.get('inapplicable', []),
                             }, new_links)
                         except Exception:
                             return None
                         finally:
                             await page.close()
 
-                    # Stagger worker starts across the page_wait interval
-                    # so results stream back evenly rather than in bursts.
-                    stagger = pw_time / max(len(urls_batch), 1)
-                    tasks = [_one(u, stagger_delay=i * stagger)
-                             for i, u in enumerate(urls_batch)]
-                    raw = await asyncio.gather(
-                        *tasks, return_exceptions=True)
+                    def _next_url():
+                        """Pull the next scannable URL from the queue."""
+                        while queue:
+                            url = queue.popleft()
+                            if url in visited:
+                                continue
+                            visited.add(url)
+                            if should_scan(
+                                    url, base_url, include_paths,
+                                    exclude_paths, exclude_regex,
+                                    exclude_query, robots_parser):
+                                return url
+                        return None
+
+                    # Fill initial window with staggered starts
+                    pending = {}
+                    stagger = page_wait / max(num_workers, 1)
+                    for i in range(num_workers):
+                        url = _next_url()
+                        if url is None or page_count >= max_pages:
+                            break
+
+                        async def _staggered(u, delay):
+                            if delay > 0:
+                                await asyncio.sleep(delay)
+                            return await _scan(u)
+
+                        task = asyncio.create_task(
+                            _staggered(url, i * stagger))
+                        pending[task] = url
+
+                    # Sliding window: as each finishes, print and
+                    # start the next
+                    while pending and not interrupted:
+                        done, _ = await asyncio.wait(
+                            pending.keys(),
+                            return_when=asyncio.FIRST_COMPLETED)
+
+                        for task in done:
+                            del pending[task]
+                            page_count += 1
+                            result = None
+                            try:
+                                result = task.result()
+                            except Exception:
+                                pass
+
+                            if result is not None:
+                                url, page_data, new_links = result
+                                v_count = _count_nodes(
+                                    page_data.get('violations', []))
+                                i_count = _count_nodes(
+                                    page_data.get('incomplete', []))
+                                if not quiet:
+                                    pw_w = len(str(max_pages))
+                                    parts = []
+                                    if v_count:
+                                        parts.append(
+                                            '{} violations'.format(
+                                                v_count))
+                                    if i_count:
+                                        parts.append(
+                                            '{} incomplete'.format(
+                                                i_count))
+                                    ss = (', '.join(parts)
+                                          if parts else 'clean')
+                                    print("[{}/{}] {} — {}".format(
+                                        str(page_count).rjust(pw_w),
+                                        max_pages, url, ss))
+                                _write_page(url, page_data)
+                                for link in new_links:
+                                    if (link not in visited
+                                            and link not in queue):
+                                        queue.append(link)
+                            else:
+                                page_count -= 1
+
+                            # Refill window
+                            if page_count < max_pages:
+                                next_url = _next_url()
+                                if next_url:
+                                    t = asyncio.create_task(
+                                        _scan(next_url))
+                                    pending[t] = next_url
+
+                        if (json_path and save_every
+                                and page_count % save_every == 0):
+                            _flush()
+
                     await browser.close()
-                    return [r for r in raw
-                            if r is not None and not isinstance(r, Exception)]
 
-            # Build axe run options
-            run_opts = {}
-            if rules:
-                run_opts['runOnly'] = {'type': 'rule', 'values': rules}
-            elif tags:
-                run_opts['runOnly'] = {'type': 'tag', 'values': tags}
-
-            while queue and page_count < max_pages and not interrupted:
-                batch = []
-                while queue and len(batch) < num_workers and \
-                        page_count + len(batch) < max_pages:
-                    url = queue.popleft()
-                    if url in visited:
-                        continue
-                    visited.add(url)
-                    if not should_scan(url, base_url, include_paths,
-                                       exclude_paths, exclude_regex,
-                                       exclude_query, robots_parser):
-                        continue
-                    batch.append(url)
-
-                if not batch:
-                    break
-
-                batch_results = asyncio.run(
-                    _pw_scan_batch(batch, axe_source, run_opts,
-                                   config, page_wait, visited, base_url))
-
-                # Deduplicate batch results — two URLs in the same batch
-                # may have redirected to the same page
-                seen_in_batch = set()
-                for url, page_data, new_links in batch_results:
-                    if url in seen_in_batch:
-                        continue
-                    seen_in_batch.add(url)
-                    page_count += 1
-                    v_count = _count_nodes(page_data.get('violations', []))
-                    i_count = _count_nodes(page_data.get('incomplete', []))
-
-                    if not quiet:
-                        page_width = len(str(max_pages))
-                        parts = []
-                        if v_count:
-                            parts.append('{} violations'.format(v_count))
-                        if i_count:
-                            parts.append('{} incomplete'.format(i_count))
-                        status_str = ', '.join(parts) if parts else 'clean'
-                        print("[{}/{}] {} — {}".format(
-                            str(page_count).rjust(page_width),
-                            max_pages, url, status_str))
-
-                    _write_page(url, page_data)
-
-                    if not no_crawl:
-                        for link in new_links:
-                            if link not in visited and link not in queue:
-                                queue.append(link)
-
-                if json_path and save_every and \
-                        page_count % save_every == 0:
-                    _flush()
+            try:
+                asyncio.run(_pw_sliding_window())
+            except KeyboardInterrupt:
+                pass
 
         else:
             # --- Selenium parallel: thread pool with separate browsers ---
@@ -2145,7 +2183,7 @@ def main():
                         pid = int(parts[0])
                         comm = parts[1]
                         if pid != os.getpid() and (
-                                'chromedriver' in comm or 'chromium' in comm
+                                'chrome' in comm
                                 or 'chrome' in comm):
                             os.kill(pid, signal.SIGKILL)
                             killed += 1
