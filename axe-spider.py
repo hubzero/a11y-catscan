@@ -444,8 +444,16 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
 
     visited = set()
     queue = [normalize_url(start_url)]
-    all_results = OrderedDict()
     page_count = 0
+
+    # Stream results to a JSONL file (one JSON object per line) instead of
+    # accumulating in memory.  A 5000-page scan would otherwise hold ~500MB+
+    # of Python dicts.  The JSONL file is converted to the final JSON/HTML
+    # at the end or on each incremental flush.
+    jsonl_path = (json_path + 'l') if json_path else None
+    if jsonl_path:
+        # Truncate — fresh scan
+        open(jsonl_path, 'w').close()
 
     print("Starting axe-core {} accessibility scan...".format(get_axe_version()))
     print("  Start URL: {}".format(start_url))
@@ -457,23 +465,45 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
         print("  Incremental save every {} pages".format(save_every))
     print()
 
+    def _write_page(url, page_data):
+        """Append one page's results to the JSONL file."""
+        if not jsonl_path:
+            return
+        with open(jsonl_path, 'a') as f:
+            f.write(json.dumps({url: page_data}, default=str) + '\n')
+
     def _flush(reason=''):
-        """Write partial results to disk (atomic rename)."""
-        if not json_path:
+        """Build final JSON + HTML from the JSONL stream on disk."""
+        if not json_path or not jsonl_path:
             return
         try:
+            # Convert JSONL → final JSON (streaming, constant memory)
             tmp = json_path + '.tmp'
-            with open(tmp, 'w') as f:
-                json.dump(all_results, f, indent=2, default=str)
+            with open(tmp, 'w') as out:
+                out.write('{\n')
+                first = True
+                with open(jsonl_path, 'r') as inp:
+                    for line in inp:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        obj = json.loads(line)
+                        for url, data in obj.items():
+                            if not first:
+                                out.write(',\n')
+                            out.write('  {}: {}'.format(
+                                json.dumps(url), json.dumps(data, default=str)))
+                            first = False
+                out.write('\n}\n')
             os.replace(tmp, json_path)
             if html_path:
                 try:
-                    generate_html_report(all_results, html_path, start_url,
+                    generate_html_report(jsonl_path, html_path, start_url,
                                          level_label or 'WCAG', allowlist=allowlist)
                 except Exception as e:
                     print('  (html flush failed: {})'.format(str(e)[:80]))
             if reason:
-                print('  [flushed {} pages ({})]'.format(len(all_results), reason))
+                print('  [flushed {} pages ({})]'.format(page_count, reason))
         except Exception as e:
             print('  (flush failed: {})'.format(str(e)[:80]))
 
@@ -561,7 +591,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
                 print("  Violations: {} ({} issues), Incomplete: {} ({} nodes), Passes: {}".format(
                     len(violations), v_count, len(incomplete), i_count, len(passes)))
 
-                all_results[url] = {
+                page_data = {
                     'url': url,
                     'timestamp': datetime.now().isoformat(),
                     'http_status': status or None,
@@ -570,6 +600,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
                     'passes': passes,
                     'inapplicable': results.get('inapplicable', []),
                 }
+                _write_page(url, page_data)
 
                 # Don't follow links from error pages
                 if not status or status < 400:
@@ -593,17 +624,33 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, level=None,
         driver.quit()
         _flush(reason='final')
 
-    return all_results
+    return page_count, jsonl_path
 
 
-def generate_html_report(all_results, output_path, start_url,
+def _iter_jsonl(jsonl_path):
+    """Iterate (url, data) pairs from a JSONL results file."""
+    with open(jsonl_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            for url, data in obj.items():
+                yield url, data
+
+
+def generate_html_report(jsonl_path, output_path, start_url,
                          level_label='WCAG 2.1 Level AA', allowlist=None):
-    """Generate an HTML report from scan results."""
+    """Generate an HTML report by streaming through JSONL results on disk.
+
+    Memory usage is O(unique_rules) regardless of page count.
+    """
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     axe_ver = get_axe_version()
     allowlist = allowlist or []
 
-    total_pages = len(all_results)
+    # --- Pass 1: aggregate stats (constant memory) ---
+    total_pages = 0
     total_violations = 0
     total_violation_nodes = 0
     total_incomplete_nodes = 0
@@ -611,8 +658,6 @@ def generate_html_report(all_results, output_path, start_url,
     impact_counts = {'critical': 0, 'serious': 0, 'moderate': 0, 'minor': 0}
     rule_summary = {}
     incomplete_summary = {}
-
-    # WCAG criteria tracking: {sc -> {'violations': n, 'incomplete': n, 'passes': n}}
     wcag_criteria = {}
 
     def _track_wcag(tags, category, count=1):
@@ -621,7 +666,8 @@ def generate_html_report(all_results, output_path, start_url,
                 wcag_criteria[sc] = {'violations': 0, 'incomplete': 0, 'passes': 0}
             wcag_criteria[sc][category] += count
 
-    for url, data in all_results.items():
+    for url, data in _iter_jsonl(jsonl_path):
+        total_pages += 1
         for v in data.get('violations', []):
             nodes = v.get('nodes', [])
             total_violations += 1
@@ -647,7 +693,6 @@ def generate_html_report(all_results, output_path, start_url,
         for v in data.get('incomplete', []):
             nodes = v.get('nodes', [])
             rule_id = v.get('id', 'unknown')
-            # Apply allowlist suppression
             if _matches_allowlist(rule_id, url, nodes, allowlist):
                 total_suppressed += len(nodes)
                 continue
@@ -829,20 +874,25 @@ def generate_html_report(all_results, output_path, start_url,
                     desc=_esc(info['help'])))
         html_parts.append('</table>')
 
+    # --- Pass 2: per-page details (stream from JSONL again) ---
     html_parts.append('<h2>Per-Page Details</h2>')
-    for url, data in all_results.items():
+    clean_pages = []
+    for url, data in _iter_jsonl(jsonl_path):
         violations = data.get('violations', [])
         incomplete = data.get('incomplete', [])
-        if not violations and not incomplete:
+        shown_incomplete = [v for v in incomplete
+                           if not _matches_allowlist(v.get('id', ''), url, v.get('nodes', []), allowlist)]
+        if not violations and not shown_incomplete:
+            clean_pages.append(url)
             continue
 
         v_count = sum(len(v.get('nodes', [])) for v in violations)
-        i_count = sum(len(v.get('nodes', [])) for v in incomplete)
+        i_count = sum(len(v.get('nodes', [])) for v in shown_incomplete)
         html_parts.append('<div class="page-section">')
         html_parts.append('<h3><a href="{}" class="page-url">{}</a></h3>'.format(
             _esc(url), _esc(url)))
         html_parts.append('<p>{} violation(s), {} issue(s) &mdash; {} incomplete, {} node(s)</p>'.format(
-            len(violations), v_count, len(incomplete), i_count))
+            len(violations), v_count, len(shown_incomplete), i_count))
 
         for v in violations:
             impact = v.get('impact', 'unknown')
@@ -861,9 +911,6 @@ def generate_html_report(all_results, output_path, start_url,
             html_parts.append(_render_nodes_html(v.get('nodes', []), limit=20))
             html_parts.append('</div>')
 
-        # Filter allowlisted incompletes from per-page view
-        shown_incomplete = [v for v in incomplete
-                           if not _matches_allowlist(v.get('id', ''), url, v.get('nodes', []), allowlist)]
         if shown_incomplete:
             html_parts.append('<h4 style="margin-top:1em;color:#e65100;">Incomplete (needs manual review)</h4>')
             for v in shown_incomplete:
@@ -877,8 +924,6 @@ def generate_html_report(all_results, output_path, start_url,
 
         html_parts.append('</div>')
 
-    clean_pages = [url for url, data in all_results.items()
-                   if not data.get('violations') and not data.get('incomplete')]
     if clean_pages:
         html_parts.append('<h2>Fully Clean Pages ({})'.format(len(clean_pages)))
         html_parts.append('</h2><ul>')
@@ -1027,7 +1072,7 @@ def main():
     html_path = os.path.join(output_dir, basename + '.html')
     json_path = os.path.join(output_dir, basename + '.json')
 
-    results = crawl_and_scan(
+    scanned, jsonl_path = crawl_and_scan(
         url,
         max_pages=max_pages,
         tags=tags,
@@ -1049,16 +1094,14 @@ def main():
     print("\nJSON report: {}".format(json_path))
     print("HTML report: {}".format(html_path))
 
-    # Summary
-    total_violations = sum(
-        sum(len(v.get('nodes', [])) for v in data.get('violations', []))
-        for data in results.values()
-    )
-    total_incomplete = sum(
-        sum(len(v.get('nodes', [])) for v in data.get('incomplete', []))
-        for data in results.values()
-    )
-    print("\nScan complete: {} pages scanned".format(len(results)))
+    # Summary (stream from JSONL, no memory spike)
+    total_violations = 0
+    total_incomplete = 0
+    if jsonl_path and os.path.exists(jsonl_path):
+        for _, data in _iter_jsonl(jsonl_path):
+            total_violations += sum(len(v.get('nodes', [])) for v in data.get('violations', []))
+            total_incomplete += sum(len(v.get('nodes', [])) for v in data.get('incomplete', []))
+    print("\nScan complete: {} pages scanned".format(scanned))
     print("  Violations: {} node(s) failing WCAG rules".format(total_violations))
     print("  Incomplete: {} node(s) needing manual review".format(total_incomplete))
 
