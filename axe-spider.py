@@ -104,8 +104,6 @@ def get_axe_version():
         try:
             with open(AXE_JS_PATH, 'r') as f:
                 header = f.read(200)
-            # Header looks like: /*! axe v4.11.3
-            import re
             m = re.search(r'axe v([\d.]+)', header)
             AXE_VERSION = m.group(1) if m else 'unknown'
         except Exception:
@@ -256,7 +254,6 @@ def run_axe(driver, axe_source, tags=None):
         callback({error: err.toString()});
     });
     """
-    driver.set_script_timeout(60)
     results = driver.execute_async_script(script, run_opts)
     return results
 
@@ -652,76 +649,23 @@ def generate_html_report(all_results, output_path, start_url, level_label='WCAG 
                     impact, impact.capitalize(),
                     _esc(v.get('helpUrl', '')), _esc(v.get('id', ''))))
             html_parts.append('<p>{}</p>'.format(_esc(v.get('help', ''))))
-
             tags = v.get('tags', [])
             wcag_tags = [t for t in tags if t.startswith('wcag')]
             if wcag_tags:
                 html_parts.append('<p class="wcag-ref">WCAG: {}</p>'.format(
                     ' '.join('<span class="tag">{}</span>'.format(_esc(t)) for t in wcag_tags)))
-
-            nodes = v.get('nodes', [])
-            html_parts.append('<details><summary>{} element(s) affected</summary>'.format(
-                len(nodes)))
-            for node in nodes[:20]:
-                html_parts.append('<div class="node-detail">')
-                target = node.get('target', [])
-                if target:
-                    html_parts.append('<p class="target">Selector: {}</p>'.format(
-                        _esc(', '.join(str(t) for t in target))))
-                html_snippet = node.get('html', '')
-                if html_snippet:
-                    if len(html_snippet) > 500:
-                        html_snippet = html_snippet[:500] + '...'
-                    html_parts.append(
-                        '<div class="html-snippet">{}</div>'.format(_esc(html_snippet)))
-                any_of = node.get('any', [])
-                all_of = node.get('all', [])
-                none_of = node.get('none', [])
-                messages = []
-                for check in any_of + all_of + none_of:
-                    msg = check.get('message', '')
-                    if msg:
-                        messages.append(msg)
-                if messages:
-                    html_parts.append('<ul>')
-                    for msg in messages[:5]:
-                        html_parts.append('<li>{}</li>'.format(_esc(msg)))
-                    html_parts.append('</ul>')
-                html_parts.append('</div>')
-
-            if len(nodes) > 20:
-                html_parts.append('<p><em>... and {} more elements</em></p>'.format(
-                    len(nodes) - 20))
-            html_parts.append('</details>')
+            html_parts.append(_render_nodes_html(v.get('nodes', []), limit=20))
             html_parts.append('</div>')
 
         if incomplete:
             html_parts.append('<h4 style="margin-top:1em;color:#e65100;">Incomplete (needs manual review)</h4>')
             for v in incomplete:
-                impact = v.get('impact', 'unknown')
                 html_parts.append('<div class="rule-card">')
                 html_parts.append(
                     '<strong><a href="{}">{}</a></strong>'.format(
                         _esc(v.get('helpUrl', '')), _esc(v.get('id', ''))))
                 html_parts.append('<p>{}</p>'.format(_esc(v.get('help', ''))))
-                nodes = v.get('nodes', [])
-                html_parts.append('<details><summary>{} element(s)</summary>'.format(len(nodes)))
-                for node in nodes[:10]:
-                    html_parts.append('<div class="node-detail">')
-                    target = node.get('target', [])
-                    if target:
-                        html_parts.append('<p class="target">Selector: {}</p>'.format(
-                            _esc(', '.join(str(t) for t in target))))
-                    html_snippet = node.get('html', '')
-                    if html_snippet:
-                        if len(html_snippet) > 300:
-                            html_snippet = html_snippet[:300] + '...'
-                        html_parts.append(
-                            '<div class="html-snippet">{}</div>'.format(_esc(html_snippet)))
-                    html_parts.append('</div>')
-                if len(nodes) > 10:
-                    html_parts.append('<p><em>... and {} more</em></p>'.format(len(nodes) - 10))
-                html_parts.append('</details>')
+                html_parts.append(_render_nodes_html(v.get('nodes', []), limit=10, snippet_max=300))
                 html_parts.append('</div>')
 
         html_parts.append('</div>')
@@ -748,6 +692,38 @@ def _esc(text):
             .replace('<', '&lt;')
             .replace('>', '&gt;')
             .replace('"', '&quot;'))
+
+
+def _render_nodes_html(nodes, limit=20, snippet_max=500):
+    """Render axe-core node details as HTML fragments."""
+    parts = []
+    parts.append('<details><summary>{} element(s)</summary>'.format(len(nodes)))
+    for node in nodes[:limit]:
+        parts.append('<div class="node-detail">')
+        target = node.get('target', [])
+        if target:
+            parts.append('<p class="target">Selector: {}</p>'.format(
+                _esc(', '.join(str(t) for t in target))))
+        html_snippet = node.get('html', '')
+        if html_snippet:
+            if len(html_snippet) > snippet_max:
+                html_snippet = html_snippet[:snippet_max] + '...'
+            parts.append('<div class="html-snippet">{}</div>'.format(_esc(html_snippet)))
+        messages = []
+        for check in node.get('any', []) + node.get('all', []) + node.get('none', []):
+            msg = check.get('message', '')
+            if msg:
+                messages.append(msg)
+        if messages:
+            parts.append('<ul>')
+            for msg in messages[:5]:
+                parts.append('<li>{}</li>'.format(_esc(msg)))
+            parts.append('</ul>')
+        parts.append('</div>')
+    if len(nodes) > limit:
+        parts.append('<p><em>... and {} more</em></p>'.format(len(nodes) - limit))
+    parts.append('</details>')
+    return '\n'.join(parts)
 
 
 def main():
