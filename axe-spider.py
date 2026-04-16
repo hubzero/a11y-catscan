@@ -94,6 +94,14 @@ def _safe_int(val, default=0):
         return default
 
 
+def _count_nodes(result_list):
+    """Count total nodes across a list of axe-core rule results."""
+    total = 0
+    for rule_result in result_list:
+        total += len(rule_result.get('nodes', []))
+    return total
+
+
 # WCAG success criteria names (subset — covers all criteria axe-core tests)
 WCAG_SC_NAMES = {
     '1.1.1': 'Non-text Content',
@@ -214,18 +222,29 @@ def _matches_allowlist(rule_id, url, nodes, allowlist):
     Returns True if the result should be suppressed.
     """
     for entry in allowlist:
+        # Rule must match
         if entry.get('rule') != rule_id:
             continue
-        # If entry specifies a URL pattern, check it
+
+        # If entry has a URL filter, it must appear in the page URL
         entry_url = entry.get('url', '')
         if entry_url and entry_url not in url:
             continue
-        # If entry specifies a target selector, check nodes
+
+        # If entry has a target filter, at least one node must match
         entry_target = entry.get('target', '')
         if entry_target:
-            if not any(entry_target in str(n.get('target', '')) for n in nodes):
+            target_found = False
+            for node in nodes:
+                if entry_target in str(node.get('target', '')):
+                    target_found = True
+                    break
+            if not target_found:
                 continue
+
+        # All filters passed — this result is allowlisted
         return True
+
     return False
 
 
@@ -555,23 +574,20 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         if not json_path or not jsonl_path:
             return
         try:
-            # Convert JSONL → final JSON (streaming, constant memory)
+            # Convert JSONL → final JSON by reading each line and
+            # writing it into a single JSON object.  We stream line-by-line
+            # so memory stays constant regardless of scan size.
             tmp = json_path + '.tmp'
             with open(tmp, 'w') as out:
                 out.write('{\n')
-                first = True
-                with open(jsonl_path, 'r') as inp:
-                    for line in inp:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        obj = json.loads(line)
-                        for url, data in obj.items():
-                            if not first:
-                                out.write(',\n')
-                            out.write('  {}: {}'.format(
-                                json.dumps(url), json.dumps(data, default=str)))
-                            first = False
+                first_entry = True
+                for page_url, page_data in _iter_jsonl(jsonl_path):
+                    if not first_entry:
+                        out.write(',\n')
+                    json_key = json.dumps(page_url)
+                    json_val = json.dumps(page_data, default=str)
+                    out.write('  {}: {}'.format(json_key, json_val))
+                    first_entry = False
                 out.write('\n}\n')
             os.replace(tmp, json_path)
             if html_path:
@@ -673,8 +689,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 incomplete = results.get('incomplete', [])
                 passes = results.get('passes', [])
 
-                v_count = sum(len(v.get('nodes', [])) for v in violations)
-                i_count = sum(len(v.get('nodes', [])) for v in incomplete)
+                v_count = _count_nodes(violations)
+                i_count = _count_nodes(incomplete)
                 if not quiet:
                     print("  Violations: {} ({} issues), Incomplete: {} ({} nodes), Passes: {}".format(
                         len(violations), v_count, len(incomplete), i_count, len(passes)))
@@ -682,7 +698,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 page_data = {
                     'url': url,
                     'timestamp': datetime.now().isoformat(),
-                    'http_status': status or None,
+                    'http_status': status if status != 0 else None,
                     'violations': violations,
                     'incomplete': incomplete,
                     'passes': passes,
@@ -690,8 +706,9 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 }
                 _write_page(url, page_data)
 
-                # Don't follow links from error pages or when using a URL list
-                if not no_crawl and (not status or status < 400):
+                # Discover new links (unless using a URL list or page returned an error)
+                is_ok = (status == 0 or status < 400)
+                if not no_crawl and is_ok:
                     new_links = extract_links(driver, base_url)
                     for link in new_links:
                         if link not in visited and link not in queue:
@@ -979,14 +996,19 @@ def generate_html_report(jsonl_path, output_path, start_url,
     for url, data in _iter_jsonl(jsonl_path):
         violations = data.get('violations', [])
         incomplete = data.get('incomplete', [])
-        shown_incomplete = [v for v in incomplete
-                           if not _matches_allowlist(v.get('id', ''), url, v.get('nodes', []), allowlist)]
+        # Filter out allowlisted incompletes
+        shown_incomplete = []
+        for v in incomplete:
+            rule_id = v.get('id', '')
+            nodes = v.get('nodes', [])
+            if not _matches_allowlist(rule_id, url, nodes, allowlist):
+                shown_incomplete.append(v)
         if not violations and not shown_incomplete:
             clean_pages.append(url)
             continue
 
-        v_count = sum(len(v.get('nodes', [])) for v in violations)
-        i_count = sum(len(v.get('nodes', [])) for v in shown_incomplete)
+        v_count = _count_nodes(violations)
+        i_count = _count_nodes(shown_incomplete)
         html_parts.append('<div class="page-section">')
         html_parts.append('<h3><a href="{}" class="page-url">{}</a></h3>'.format(
             _esc(url), _esc(url)))
@@ -1520,8 +1542,8 @@ KEY FLAGS FOR LLM WORKFLOWS
     violation_rules = set()
     if jsonl_path and os.path.exists(jsonl_path):
         for _, data in _iter_jsonl(jsonl_path):
-            total_violations += sum(len(v.get('nodes', [])) for v in data.get('violations', []))
-            total_incomplete += sum(len(v.get('nodes', [])) for v in data.get('incomplete', []))
+            total_violations += _count_nodes(data.get('violations', []))
+            total_incomplete += _count_nodes(data.get('incomplete', []))
             for v in data.get('violations', []):
                 violation_rules.add(v.get('id', ''))
 
