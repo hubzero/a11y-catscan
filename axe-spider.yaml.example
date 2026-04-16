@@ -21,11 +21,16 @@ page_wait: 1
 # Flush reports every N pages (partial results survive kills)
 save_every: 25
 
-# Paths to exclude from scanning
+# Paths to exclude from scanning (prefix match)
 exclude_paths:
   - /login
   - /api
   - /administrator
+
+# Only scan URLs under these path prefixes (empty = scan everything)
+# include_paths:
+#   - /docs
+#   - /help
 
 # Regex patterns to exclude (e.g. paths behind HTTP basic auth)
 # exclude_regex:

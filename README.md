@@ -2,22 +2,22 @@
 
 WCAG accessibility scanner that crawls a website using Selenium/Chromium
 and runs [axe-core](https://github.com/dequelabs/axe-core) checks on
-each page, producing HTML and JSON reports.
+each page.  Produces HTML, JSON, and LLM-optimized markdown reports.
 
 ## Quick start
 
 ```bash
 # Scan with defaults from config
-python3 axe-spider.py
+axe-spider.py
 
 # Scan a specific URL
-python3 axe-spider.py https://example.com/
+axe-spider.py https://example.com/
 
-# Scan 200 pages at WCAG 2.2 AA
-python3 axe-spider.py --level wcag22aa --max-pages 200 https://example.com/
+# Scan 500 pages with LLM-friendly output
+axe-spider.py --max-pages 500 --llm https://example.com/
 
-# Restrict to a section
-python3 axe-spider.py --include-path /docs https://example.com/
+# Quick single-page check after a fix
+axe-spider.py --page -q --summary-json https://example.com/fixed-page
 ```
 
 ## Setup
@@ -29,7 +29,7 @@ pip install selenium
 ```
 
 Copy `axe-spider.yaml.example` to `axe-spider.yaml` and edit for your
-site. The config file is gitignored so each deployment keeps its own
+site.  The config file is gitignored so each deployment keeps its own
 settings without merge conflicts.
 
 ## Configuration
@@ -37,31 +37,96 @@ settings without merge conflicts.
 All settings in `axe-spider.yaml` can be overridden on the command line.
 
 | Setting | CLI flag | Default | Description |
-|---------|----------|---------|-------------|
+|---|---|---|---|
 | `url` | positional arg | — | Starting URL to crawl |
 | `level` | `--level` | `wcag21aa` | WCAG conformance level |
 | `max_pages` | `--max-pages` | 50 | Maximum pages to scan |
-| `page_wait` | — | 1 | Seconds to wait after page load |
+| `page_wait` | — | 1 | Seconds to wait after page load for JS to settle |
 | `save_every` | `--save-every` | 25 | Flush reports every N pages |
 | `output_dir` | `--output-dir` | cwd | Report output directory |
 | `exclude_paths` | `--exclude-path` | — | URL path prefixes to skip |
-| `exclude_regex` | — | — | Regex patterns to skip |
-| `exclude_query` | — | — | Query substrings to skip |
+| `exclude_regex` | — | — | Regex patterns to skip (e.g. auth-protected routes) |
+| `exclude_query` | — | — | Query substrings to skip (e.g. `action=overview`) |
+| `include_paths` | `--include-path` | — | Only scan URLs under these prefixes |
+| `niceness` | — | 10 | OS nice level (0–19, higher = lower CPU priority) |
+| `oom_score_adj` | — | 1000 | Linux OOM killer score (1000 = killed first) |
+| `allowlist` | `--allowlist` | — | YAML file of known-acceptable incompletes |
+| `ignore_certificate_errors` | — | false | Accept self-signed TLS certs |
 | `chromium_path` | — | `/usr/bin/chromium-browser` | Path to Chrome/Chromium |
 | `chromedriver_path` | — | `/usr/bin/chromedriver` | Path to ChromeDriver |
 
-## Features
+## Output files
 
-- Breadth-first crawl with automatic link discovery
-- WCAG 2.0 / 2.1 / 2.2 level presets (A through AAA)
-- HTML report with impact breakdown, per-page details, rule summaries
-- Incomplete (needs-review) reporting alongside violations
-- Incremental save — partial results survive if the scan is killed
-- HTTP pre-check skips error pages' links to prevent crawl fan-out
-- Same-origin redirect detection (catches login walls)
-- Skips non-HTML responses, empty pages, and binary downloads
-- Configurable via YAML — no code changes needed per site
+Each scan produces:
+
+| File | Description |
+|---|---|
+| `*.json` | Full axe-core results for every page (violations, incomplete, passes) |
+| `*.html` | Human-readable report with summary cards, WCAG criteria table, per-page details |
+| `*.jsonl` | Streaming results (one JSON object per line) — used for `--diff` and `--rescan` |
+| `*.md` | LLM-optimized markdown summary (only with `--llm`) — ~300 tokens vs ~300K for JSON |
+
+## Key flags
+
+### Scanning modes
+| Flag | Description |
+|---|---|
+| `--crawl` | Crawl and discover pages from the starting URL (default) |
+| `--page` | Scan only the given URL, no crawling — fast single-page verify |
+| `--urls FILE` | Scan a specific list of URLs from a file (one per line) |
+| `--rescan PREV.jsonl` | Re-scan only pages that had issues in a previous scan |
+
+### Filtering
+| Flag | Description |
+|---|---|
+| `--rule RULE` | Only run specific axe rules (repeatable, e.g. `--rule color-contrast`) |
+| `--include-path PREFIX` | Only scan URLs starting with this prefix (repeatable) |
+| `--exclude-path PREFIX` | Skip URLs starting with this prefix (repeatable) |
+| `--allowlist FILE` | Suppress known-acceptable incompletes from reports |
+
+### Output control
+| Flag | Description |
+|---|---|
+| `--llm` | Generate compact markdown report optimized for LLM context windows |
+| `--summary-json` | Print one-line JSON summary to stdout (machine-parseable) |
+| `--diff PREV.jsonl` | Compare against a previous scan — show fixed/new/remaining |
+| `-q` / `--quiet` | Suppress per-page output, show only final summary |
+
+### Help
+| Flag | Description |
+|---|---|
+| `--help` | Show all options |
+| `--help-audit` | Print a WCAG audit workflow guide (useful for LLM assistants) |
+
+## Workflow: scan → fix → verify
+
+```bash
+# 1. Full baseline scan
+axe-spider.py --max-pages 500 --llm https://example.com/
+
+# 2. Read the .md report, fix issues in source code
+
+# 3. Verify the fix on the specific page
+axe-spider.py --page -q --summary-json https://example.com/fixed-page
+# Exit code 0 = clean, 1 = still has violations
+
+# 4. Re-scan only pages that failed before, compare against baseline
+axe-spider.py --rescan baseline.jsonl --diff baseline.jsonl --llm
+
+# 5. Suppress known axe-core limitations in an allowlist
+echo '- rule: color-contrast
+  url: /homepage
+  reason: axe-core flex layout measurement limitation' >> allowlist.yaml
+```
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | No violations found |
+| 1 | Violations found |
+| 2 | Setup error (missing selenium, chromium, chromedriver, or axe.min.js) |
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Bundled axe-core is MPL-2.0.
+MIT — see [LICENSE](LICENSE).  Bundled axe-core is MPL-2.0.
