@@ -1148,6 +1148,8 @@ def main():
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')
+    parser.add_argument('--url-only', action='store_true',
+                        help='Scan only the given URL (no crawling). Fast single-page verify.')
     parser.add_argument('--llm', action='store_true',
                         help='Generate a compact markdown summary optimized for LLM context')
     parser.add_argument('-v', '--verbose', action='store_true',
@@ -1174,7 +1176,10 @@ def main():
     level_label = level_info.get('label', 'Custom') if not args.tags else 'Custom tags'
 
     # Resolve max pages
-    max_pages = args.max_pages or int(config.get('max_pages', 50))
+    if args.url_only:
+        max_pages = 1
+    else:
+        max_pages = args.max_pages or int(config.get('max_pages', 50))
 
     # Resolve exclude paths: config defaults + CLI additions
     exclude_paths = []
