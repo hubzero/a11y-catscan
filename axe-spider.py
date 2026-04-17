@@ -1143,8 +1143,27 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 print("  Error on {}: {}, skipping".format(url, str(e)[:100]))
             return None
 
-    # SIGTERM/SIGINT handler: flush partial results and exit
+    # SIGTERM/SIGINT handler: flush partial results and save state.
     interrupted = False
+
+    def _save_state(reason=''):
+        """Save crawl state (queue + visited) for --resume."""
+        if not json_path or no_crawl or not queue:
+            return
+        state_path = json_path.replace('.json', '.state.json')
+        try:
+            with open(state_path, 'w') as f:
+                json.dump({
+                    'queue': list(queue),
+                    'visited': sorted(visited),
+                    'start_url': start_url,
+                    'pages_scanned': page_count,
+                }, f)
+            if not quiet:
+                print("  Crawl state saved: {} ({} queued, {} visited)".format(
+                    state_path, len(queue), len(visited)))
+        except Exception as e:
+            print("  (state save failed: {})".format(e))
 
     # Signal handler sets the interrupted flag.  Each scan mode checks this
     # flag and breaks out of its loop.  We don't call sys.exit() here because
@@ -1156,8 +1175,19 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         interrupted = True
         print('\n!! Signal {} — flushing {} pages...'.format(signum, page_count))
         _flush(reason='signal {}'.format(signum))
+        _save_state()
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
+
+    # SIGUSR1: save state on demand without stopping the scan.
+    def _on_usr1(signum, frame):
+        print('\n  [SIGUSR1 — saving state snapshot]')
+        _flush(reason='snapshot')
+        _save_state()
+    try:
+        signal.signal(signal.SIGUSR1, _on_usr1)
+    except (AttributeError, OSError):
+        pass  # SIGUSR1 not available on Windows
 
     # Create browser pool.
     # Selenium: one chromedriver + Chromium per worker (~300MB each).
@@ -1736,24 +1766,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             except Exception:
                 pass
         _flush(reason='final')
-
-        # Save crawl state so the scan can be resumed with --resume.
-        # Only useful for crawl mode (not --page or --urls).
-        if json_path and not no_crawl and queue:
-            state_path = json_path.replace('.json', '.state.json')
-            try:
-                with open(state_path, 'w') as f:
-                    json.dump({
-                        'queue': list(queue),
-                        'visited': sorted(visited),
-                        'start_url': start_url,
-                        'pages_scanned': page_count,
-                    }, f)
-                if not quiet:
-                    print("  Crawl state saved: {} ({} queued, {} visited)".format(
-                        state_path, len(queue), len(visited)))
-            except Exception as e:
-                print("  (state save failed: {})".format(e))
+        _save_state()
 
     wall_time = time.time() - scan_start_time
     return page_count, jsonl_path, wall_time, total_page_time
