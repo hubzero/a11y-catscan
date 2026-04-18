@@ -1388,6 +1388,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                         None, load_cookies(config))
                     if _pw_auth_cookies:
                         context = await browser.new_context(
+                            viewport={'width': 1280, 'height': 1024},
                             ignore_https_errors=ignore_certs)
                         await context.add_cookies(_pw_auth_cookies)
                         if not quiet:
@@ -1411,9 +1412,12 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             _vskip(url, "not HTML ({})".format(
                                 content_type))
                             return None
-                        page = await (context or browser).new_page(
-                            viewport={'width': 1280, 'height': 1024},
-                            ignore_https_errors=ignore_certs)
+                        if context:
+                            page = await context.new_page()
+                        else:
+                            page = await browser.new_page(
+                                viewport={'width': 1280, 'height': 1024},
+                                ignore_https_errors=ignore_certs)
                         try:
                             # Rate limit: async sleep so we don't block
                             # the event loop.  Skipped on initial
