@@ -1,4 +1,4 @@
-# axe-spider
+# axe-spyder
 
 WCAG accessibility scanner that crawls a website using Selenium/Chromium
 and runs [axe-core](https://github.com/dequelabs/axe-core) checks on
@@ -8,16 +8,16 @@ each page.  Produces HTML, JSON, and LLM-optimized markdown reports.
 
 ```bash
 # Scan with defaults from config
-axe-spider.py
+axe-spyder.py
 
 # Scan a specific URL
-axe-spider.py https://example.com/
+axe-spyder.py https://example.com/
 
 # Scan 500 pages with LLM-friendly output
-axe-spider.py --max-pages 500 --llm https://example.com/
+axe-spyder.py --max-pages 500 --llm https://example.com/
 
 # Quick single-page check after a fix
-axe-spider.py --page -q --summary-json https://example.com/fixed-page
+axe-spyder.py --page -q --summary-json https://example.com/fixed-page
 ```
 
 ## Setup
@@ -28,13 +28,13 @@ Requires Python 3.6+, Selenium, and Chromium/Chrome + ChromeDriver.
 pip install selenium
 ```
 
-Copy `axe-spider.yaml.example` to `axe-spider.yaml` and edit for your
+Copy `axe-spyder.yaml.example` to `axe-spyder.yaml` and edit for your
 site.  The config file is gitignored so each deployment keeps its own
 settings without merge conflicts.
 
 ## Configuration
 
-All settings in `axe-spider.yaml` can be overridden on the command line.
+All settings in `axe-spyder.yaml` can be overridden on the command line.
 
 | Setting | CLI flag | Default | Description |
 |---|---|---|---|
@@ -145,20 +145,20 @@ Scan complete: 500 pages in 312.4s (0.6s/page)
 
 ```bash
 # 1. Full baseline scan
-axe-spider.py --max-pages 500 --llm https://example.com/
+axe-spyder.py --max-pages 500 --llm https://example.com/
 
 # 2. Read the .md report, fix issues in source code
 
 # 3. Verify the fix on the specific page
-axe-spider.py --page -q --summary-json https://example.com/fixed-page
+axe-spyder.py --page -q --summary-json https://example.com/fixed-page
 # Exit code 0 = clean, 1 = still has violations
 
 # 4. Re-scan only pages that failed before, compare against baseline
-axe-spider.py --rescan baseline.jsonl --diff baseline.jsonl --llm
+axe-spyder.py --rescan baseline.jsonl --diff baseline.jsonl --llm
 
 # 5. Large site? Scan in chunks and resume
-axe-spider.py --max-pages 10000 https://example.com/
-axe-spider.py --max-pages 10000 --resume reports/scan.state.json https://example.com/
+axe-spyder.py --max-pages 10000 https://example.com/
+axe-spyder.py --max-pages 10000 --resume reports/scan.state.json https://example.com/
 
 # 6. Suppress known axe-core limitations in an allowlist
 echo '- rule: color-contrast

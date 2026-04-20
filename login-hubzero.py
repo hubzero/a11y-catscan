@@ -1,6 +1,6 @@
 """Login plugin for HubZero sites.
 
-Called by axe-spider when auth.login_script is set in the config.
+Called by axe-spyder when auth.login_script is set in the config.
 
 Required:
     async def login(context, config) -> bool
@@ -32,7 +32,7 @@ async def login(context, config):
 
     Args:
         context: Playwright BrowserContext (already has viewport set)
-        config: dict from axe-spider.yaml
+        config: dict from axe-spyder.yaml
 
     Returns:
         True if login succeeded, False otherwise
