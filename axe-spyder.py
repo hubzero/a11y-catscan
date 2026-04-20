@@ -618,12 +618,13 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     if wait_strategy not in ('networkidle', 'load', 'domcontentloaded', 'commit'):
         wait_strategy = 'networkidle'
     engine = config.get('engine', 'axe')
-    valid_engines = ('axe', 'alfa', 'ibm', 'both', 'all')
+    valid_engines = ('axe', 'alfa', 'ibm', 'htmlcs', 'both', 'all')
     if engine not in valid_engines:
         engine = 'axe'
     use_axe = engine in ('axe', 'both', 'all')
     use_alfa = engine in ('alfa', 'both', 'all')
     use_ibm = engine in ('ibm', 'all')
+    use_htmlcs = engine in ('htmlcs', 'all')
     if use_axe:
         axe_source = load_axe_source()
     else:
@@ -640,6 +641,18 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             print("ERROR: IBM Equal Access not found. "
                   "Run: npm install", file=sys.stderr)
             use_ibm = False
+    htmlcs_source = None
+    if use_htmlcs:
+        htmlcs_path = os.path.join(
+            SCRIPT_DIR, 'node_modules',
+            'html_codesniffer', 'build', 'HTMLCS.js')
+        if os.path.exists(htmlcs_path):
+            with open(htmlcs_path, 'r') as f:
+                htmlcs_source = f.read()
+        else:
+            print("ERROR: HTML_CodeSniffer not found. "
+                  "Run: npm install", file=sys.stderr)
+            use_htmlcs = False
     num_workers = _safe_int(config.get('workers', 1), 1)
     # Set up auth cookie header for any http_status() utility calls.
     global _http_cookie_header
@@ -867,7 +880,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             run_opts['runOnly'] = {'type': 'tag', 'values': tags}
 
         async def _pw_sliding_window():
-            nonlocal page_count, total_page_time, use_alfa, use_ibm
+            nonlocal page_count, total_page_time, use_alfa, use_ibm, use_htmlcs
             from playwright.async_api import async_playwright
             async with async_playwright() as pw:
                 launch_args = [
@@ -1277,6 +1290,91 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             except Exception as e:
                                 if verbose and not quiet:
                                     print("  ibm error: {}".format(e))
+
+                        # HTML_CodeSniffer engine (browser injection)
+                        if use_htmlcs and htmlcs_source:
+                            try:
+                                await page.add_script_tag(
+                                    content=htmlcs_source)
+                                htmlcs_std = 'WCAG2AA'
+                                if level and 'aaa' in level:
+                                    htmlcs_std = 'WCAG2AAA'
+                                elif (level and 'a' in level
+                                      and 'aa' not in level):
+                                    htmlcs_std = 'WCAG2A'
+                                htmlcs_results = await page.evaluate(
+                                    """(std) => {
+                                        return new Promise(r => {
+                                            HTMLCS.process(
+                                                std, document, () => {
+                                                r(HTMLCS.getMessages()
+                                                    .map(m => ({
+                                                    type: m.type,
+                                                    code: m.code || '',
+                                                    msg: m.msg || '',
+                                                    path: m.element
+                                                        && m.element
+                                                            .outerHTML
+                                                        ? m.element
+                                                            .outerHTML
+                                                            .substring(
+                                                                0, 120)
+                                                        : ''
+                                                })));
+                                            });
+                                        });
+                                    }""", htmlcs_std)
+                                for r in htmlcs_results:
+                                    t = r.get('type', 0)
+                                    # 1=ERROR → violation
+                                    # 2=WARNING → incomplete
+                                    if t == 1:
+                                        results['violations'].append({
+                                            'id': r['code'].split(
+                                                '.')[-1],
+                                            'engine': 'htmlcs',
+                                            'description':
+                                                r.get('msg', ''),
+                                            'help':
+                                                r.get('msg', ''),
+                                            'helpUrl': '',
+                                            'impact': 'serious',
+                                            'tags': [],
+                                            'nodes': [{
+                                                'target': [
+                                                    r.get('code', '')],
+                                                'html':
+                                                    r.get('path', ''),
+                                                'any': [{
+                                                    'message':
+                                                        r.get('msg',
+                                                              '')}],
+                                            }],
+                                        })
+                                    elif t == 2:
+                                        results['incomplete'].append({
+                                            'id': r['code'].split(
+                                                '.')[-1],
+                                            'engine': 'htmlcs',
+                                            'help':
+                                                r.get('msg', ''),
+                                            'helpUrl': '',
+                                            'impact': 'moderate',
+                                            'nodes': [{
+                                                'target': [
+                                                    r.get('code', '')],
+                                                'html':
+                                                    r.get('path', ''),
+                                                'any': [{
+                                                    'message':
+                                                        r.get('msg',
+                                                              '')}],
+                                            }],
+                                        })
+                            except Exception as e:
+                                if verbose and not quiet:
+                                    print("  htmlcs error: {}"
+                                          .format(e))
 
                         # Alfa engine (via CDP subprocess)
                         if use_alfa and _alfa_proc:
@@ -2497,11 +2595,13 @@ def main():
                              'networkidle waits for no network activity for 500ms. '
                              'load uses the traditional load event + page_wait delay.')
     parser.add_argument('--engine', default=None,
-                        choices=['axe', 'alfa', 'ibm', 'both', 'all'],
+                        choices=['axe', 'alfa', 'ibm', 'htmlcs',
+                                 'both', 'all'],
                         help='Accessibility engine (default: axe). '
                              'axe: axe-core. alfa: Siteimprove Alfa. '
                              'ibm: IBM Equal Access. '
-                             'both: axe + alfa. all: all three engines.')
+                             'htmlcs: HTML_CodeSniffer. '
+                             'both: axe + alfa. all: all four engines.')
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')
