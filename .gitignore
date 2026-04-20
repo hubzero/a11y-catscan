@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 reports/
-axe-spider.yaml
+axe-spyder.yaml
 allowlist.yaml
 .auth-state.json
+node_modules/
+cookies.json

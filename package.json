@@ -1,0 +1,9 @@
+{
+  "name": "axe-spyder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WCAG accessibility scanner — axe-core and Siteimprove Alfa engines",
+  "dependencies": {
+    "axe-core": "^4.11.3"
+  }
+}

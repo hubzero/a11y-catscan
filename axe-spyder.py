@@ -53,11 +53,11 @@ except ImportError:
     print("  Install it with:  pip install pyyaml", file=sys.stderr)
     sys.exit(2)
 
-# All supporting files (axe.min.js, config) live alongside this script.
+# All supporting files (config, node_modules) live alongside this script.
 # This lets the tool work as a self-contained directory you can clone
 # and run from anywhere without installation.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-AXE_JS_PATH = os.path.join(SCRIPT_DIR, 'axe.min.js')
+AXE_JS_PATH = os.path.join(SCRIPT_DIR, 'node_modules', 'axe-core', 'axe.min.js')
 DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, 'axe-spyder.yaml')
 
 # File extensions that are never HTML pages.  Using a frozenset gives O(1)
@@ -292,11 +292,10 @@ def get_axe_version():
 
 
 def load_axe_source():
-    """Read the bundled axe-core JS library into a string for injection."""
+    """Read the axe-core JS library from node_modules for injection."""
     if not os.path.exists(AXE_JS_PATH):
         print("ERROR: axe-core not found at {}".format(AXE_JS_PATH), file=sys.stderr)
-        print("Download it: curl -o axe.min.js https://cdn.jsdelivr.net/npm/axe-core/axe.min.js",
-              file=sys.stderr)
+        print("Run: npm install", file=sys.stderr)
         sys.exit(2)
     with open(AXE_JS_PATH, 'r') as f:
         return f.read()
