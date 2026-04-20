@@ -2601,11 +2601,11 @@ def main():
                         help='Page load strategy (default: networkidle). '
                              'networkidle waits for no network activity for 500ms. '
                              'load uses the traditional load event + page_wait delay.')
-    parser.add_argument('--engine', nargs='+', default=None,
+    parser.add_argument('--engine', action='append', default=None,
                         metavar='ENGINE',
-                        help='Accessibility engines to run (default: axe). '
-                             'Specify one or more: axe, alfa, ibm, htmlcs, all. '
-                             'Examples: --engine axe alfa, --engine all')
+                        help='Accessibility engine to run (repeatable, default: axe). '
+                             'Engines: axe, alfa, ibm, htmlcs, all. '
+                             'Example: --engine axe --engine alfa')
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')
