@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-axe-spyder - WCAG accessibility scanner using axe-core, Selenium, and Chromium.
+axe-spyder - WCAG accessibility scanner using axe-core, Playwright, and Chromium.
 
 Crawls a website and runs axe-core accessibility checks on each page,
 producing HTML and JSON reports.
@@ -36,12 +36,10 @@ import re
 import signal
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
 import urllib.error
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
@@ -53,18 +51,6 @@ try:
 except ImportError:
     print("ERROR: PyYAML is not installed.", file=sys.stderr)
     print("  Install it with:  pip install pyyaml", file=sys.stderr)
-    sys.exit(2)
-
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.common.exceptions import (
-        TimeoutException, WebDriverException,
-    )
-except ImportError:
-    print("ERROR: selenium is not installed.", file=sys.stderr)
-    print("  Install it with:  pip install selenium", file=sys.stderr)
-    print("  (Python 3.7+ required for Selenium 4)", file=sys.stderr)
     sys.exit(2)
 
 # All supporting files (axe.min.js, config) live alongside this script.
@@ -320,24 +306,21 @@ def load_axe_source():
 # This prevents orphaned chromium/chromedriver processes when the script
 # crashes, is killed, or exits abnormally.
 _browser_pids = set()
-_browser_pids_lock = threading.Lock()
 
 
 def _register_browser_pid(pid):
     """Register a browser process PID for cleanup on exit."""
-    with _browser_pids_lock:
-        _browser_pids.add(pid)
+    _browser_pids.add(pid)
 
 
 def _cleanup_browsers():
     """Kill any browser processes we launched.  Called via atexit."""
-    with _browser_pids_lock:
-        for pid in _browser_pids:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        _browser_pids.clear()
+    for pid in list(_browser_pids):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    _browser_pids.clear()
 
     # Also kill any chromedriver/chromium processes that are children of
     # this process (catches anything missed by PID tracking).
@@ -366,235 +349,28 @@ atexit.register(_cleanup_browsers)
 
 
 class RateLimiter:
-    """Thread-safe rate limiter that enforces a minimum delay between calls.
+    """Rate limiter that enforces a minimum delay between calls.
 
-    Used to ensure that all worker threads together don't exceed the
-    robots.txt Crawl-delay.  Each worker calls wait() before making a
-    request, and it sleeps if needed to maintain the minimum interval.
+    Used to ensure that all async workers together don't exceed the
+    robots.txt Crawl-delay.  Each worker calls wait_time() before making a
+    request and sleeps (via asyncio.sleep) if needed to maintain the
+    minimum interval.
     """
 
     def __init__(self, min_interval):
         self.min_interval = min_interval
-        self._lock = threading.Lock()
         self._last_time = 0
-
-    def wait(self):
-        """Block (synchronous) until the rate limit allows the next request."""
-        if self.min_interval <= 0:
-            return
-        with self._lock:
-            now = time.time()
-            elapsed = now - self._last_time
-            if elapsed < self.min_interval:
-                time.sleep(self.min_interval - elapsed)
-            self._last_time = time.time()
 
     def wait_time(self):
         """Return seconds to sleep (for async callers that need asyncio.sleep)."""
         if self.min_interval <= 0:
             return 0
-        with self._lock:
-            now = time.time()
-            elapsed = now - self._last_time
-            delay = max(0, self.min_interval - elapsed)
-            self._last_time = now + delay
-            return delay
+        now = time.time()
+        elapsed = now - self._last_time
+        delay = max(0, self.min_interval - elapsed)
+        self._last_time = now + delay
+        return delay
 
-
-# ---------------------------------------------------------------------------
-# Browser abstraction — thin wrapper so crawl_and_scan doesn't care whether
-# Selenium or Playwright is behind it.  Both expose the same 6 methods:
-#   navigate(url), current_url, page_source, run_js(script),
-#   run_js_async(script, args), quit()
-# ---------------------------------------------------------------------------
-
-class SeleniumBrowser:
-    """Browser driver backed by Selenium + ChromeDriver."""
-
-    def __init__(self, config):
-        # Pre-flight checks — catch missing binaries before Selenium's cryptic errors
-        chromium = config.get('chromium_path', '/usr/bin/chromium-browser')
-        chromedriver = config.get('chromedriver_path', '/usr/bin/chromedriver')
-        if not os.path.isfile(chromium):
-            print("ERROR: Chromium not found at: {}".format(chromium), file=sys.stderr)
-            print("  Install it or set chromium_path in axe-spyder.yaml", file=sys.stderr)
-            sys.exit(2)
-        if not os.path.isfile(chromedriver):
-            print("ERROR: ChromeDriver not found at: {}".format(chromedriver), file=sys.stderr)
-            print("  Install it or set chromedriver_path in axe-spyder.yaml", file=sys.stderr)
-            sys.exit(2)
-
-        opts = Options()
-        opts.binary_location = chromium
-        opts.add_argument('--headless')
-        opts.add_argument('--no-sandbox')
-        opts.add_argument('--disable-dev-shm-usage')
-        opts.add_argument('--disable-gpu')
-        opts.add_argument('--window-size=1280,1024')
-        if config.get('ignore_certificate_errors') in (True, 'true', 'yes', '1'):
-            opts.add_argument('--ignore-certificate-errors')
-
-        # Block file downloads — crawler follows all links, don't fetch binaries
-        prefs = {
-            'download_restrictions': 3,
-            'download.default_directory': '/dev/null',
-            'download.prompt_for_download': False,
-            'profile.default_content_setting_values.automatic_downloads': 2,
-        }
-        opts.add_experimental_option('prefs', prefs)
-
-        # Selenium 4 uses Service(), Selenium 3 uses executable_path=
-        try:
-            try:
-                from selenium.webdriver.chrome.service import Service
-                self._driver = webdriver.Chrome(
-                    service=Service(chromedriver), options=opts)
-            except (ImportError, TypeError):
-                self._driver = webdriver.Chrome(
-                    executable_path=chromedriver, options=opts)
-        except WebDriverException as e:
-            print("ERROR: Could not start browser.", file=sys.stderr)
-            msg = str(e).split('\n')[0][:200]
-            print("  {}".format(msg), file=sys.stderr)
-            print("  Chromium: {}  ChromeDriver: {}".format(
-                chromium, chromedriver), file=sys.stderr)
-            sys.exit(2)
-        self._driver.set_page_load_timeout(30)
-        self._driver.set_script_timeout(120)
-        self._driver.implicitly_wait(5)
-        # Track the chromedriver PID for cleanup on exit
-        try:
-            pid = self._driver.service.process.pid
-            _register_browser_pid(pid)
-        except Exception:
-            pass
-
-    def navigate(self, url):
-        self._driver.get(url)
-
-    @property
-    def current_url(self):
-        return self._driver.current_url
-
-    @property
-    def page_source(self):
-        return self._driver.page_source
-
-    def run_js(self, script):
-        return self._driver.execute_script(script)
-
-    def run_js_async(self, script, args):
-        return self._driver.execute_async_script(script, args)
-
-    def quit(self):
-        self._driver.quit()
-
-
-class PlaywrightBrowser:
-    """Browser driver backed by Playwright (faster, no chromedriver needed).
-
-    Used for serial scanning (workers=1).  For parallel scanning (workers>1),
-    crawl_and_scan uses Playwright's async API directly — it doesn't go
-    through this class.
-
-    Install: pip install playwright && playwright install chromium
-    """
-
-    def __init__(self, config):
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            print("ERROR: playwright is not installed.", file=sys.stderr)
-            print("  Install it with:", file=sys.stderr)
-            print("    pip install playwright", file=sys.stderr)
-            print("    playwright install chromium", file=sys.stderr)
-            sys.exit(2)
-
-        self._pw = sync_playwright().start()
-        ignore_certs = config.get('ignore_certificate_errors') in (
-            True, 'true', 'yes', '1')
-        launch_args = ['--disable-dev-shm-usage', '--disable-gpu']
-
-        # Playwright manages its own Chromium, but use a custom path if set
-        chromium_path = config.get('chromium_path')
-        if chromium_path and os.path.isfile(chromium_path):
-            self._browser = self._pw.chromium.launch(
-                headless=True, executable_path=chromium_path,
-                args=launch_args)
-        else:
-            self._browser = self._pw.chromium.launch(
-                headless=True, args=launch_args)
-
-        try:
-            _register_browser_pid(self._browser.process.pid)
-        except Exception:
-            pass
-
-        self._page = self._browser.new_page(
-            viewport={'width': 1280, 'height': 1024},
-            ignore_https_errors=ignore_certs,
-        )
-        self._page.set_default_timeout(30000)
-        self._page.set_default_navigation_timeout(30000)
-
-    def navigate(self, url):
-        """Load a URL in the browser."""
-        self._page.goto(url, wait_until='load')
-
-    @property
-    def current_url(self):
-        """Return the current page URL (after any redirects)."""
-        return self._page.url
-
-    @property
-    def page_source(self):
-        """Return the page's HTML content."""
-        return self._page.content()
-
-    def run_js(self, script):
-        """Execute JavaScript synchronously and return the result.
-
-        Handles two Playwright quirks:
-        - Strips 'return ' prefix (Playwright auto-returns expressions)
-        - Uses add_script_tag for large scripts (axe-core is ~500KB)
-        """
-        script = script.strip()
-        if script.startswith('return '):
-            script = script[7:]
-        if len(script) > 10000:
-            self._page.add_script_tag(content=script)
-            return None
-        return self._page.evaluate(script)
-
-    def run_js_async(self, script, args):
-        """Run axe.run() via Playwright's native Promise support.
-
-        Selenium uses a callback pattern for async JS.  Playwright can
-        await Promises directly, so we call axe.run() as a Promise.
-        """
-        return self._page.evaluate(
-            """(opts) => {
-                return axe.run(document, opts).catch(err => {
-                    return {error: err.toString()};
-                });
-            }""",
-            args
-        )
-
-    def quit(self):
-        """Close the page, browser, and Playwright process."""
-        try:
-            self._page.close()
-        except Exception:
-            pass
-        try:
-            self._browser.close()
-        except Exception:
-            pass
-        try:
-            self._pw.stop()
-        except Exception:
-            pass
 
 
 
@@ -621,69 +397,6 @@ def load_cookies(config):
     except Exception:
         return []
 
-
-def inject_cookies_selenium(driver, cookies, base_url):
-    """Inject saved cookies into a Selenium browser session."""
-    if not cookies:
-        return
-    # Navigate to the domain first so cookies can be set
-    driver.navigate(base_url)
-    for cookie in cookies:
-        # Selenium needs specific format — strip Playwright-specific keys
-        c = {}
-        for key in ('name', 'value', 'domain', 'path', 'secure', 'httpOnly'):
-            if key in cookie:
-                c[key] = cookie[key]
-        if 'expires' in cookie:
-            c['expiry'] = int(cookie['expires']) if cookie['expires'] else None
-        if 'sameSite' in cookie:
-            val = cookie['sameSite']
-            if val in ('Strict', 'Lax', 'None'):
-                c['sameSite'] = val
-        try:
-            driver._driver.add_cookie(c)
-        except Exception:
-            pass
-
-
-def inject_cookies_playwright(context, cookies):
-    """Inject saved cookies into a Playwright browser context (async)."""
-    if not cookies:
-        return []
-    # Playwright cookies need 'name', 'value', 'url' or 'domain'+'path'
-    clean = []
-    for c in cookies:
-        entry = {
-            'name': c.get('name', ''),
-            'value': c.get('value', ''),
-            'domain': c.get('domain', ''),
-            'path': c.get('path', '/'),
-        }
-        if 'secure' in c:
-            entry['secure'] = c['secure']
-        if 'httpOnly' in c:
-            entry['httpOnly'] = c['httpOnly']
-        if 'expires' in c and c['expires']:
-            entry['expires'] = float(c['expires'])
-        if 'sameSite' in c and c['sameSite'] in ('Strict', 'Lax', 'None'):
-            entry['sameSite'] = c['sameSite']
-        clean.append(entry)
-    return clean
-
-
-def create_browser(config=None):
-    """Create a browser instance based on the 'driver' config setting.
-
-    Returns a SeleniumBrowser or PlaywrightBrowser — both expose the same
-    interface so the rest of the code doesn't need to know which one it is.
-    """
-    config = config or {}
-    driver_type = config.get('driver', 'selenium').lower()
-
-    if driver_type == 'playwright':
-        return PlaywrightBrowser(config)
-    else:
-        return SeleniumBrowser(config)
 
 
 # Parameters to strip from URLs during normalization.  These are common
@@ -850,61 +563,6 @@ def http_status(url, timeout=10):
             return (0, '')
 
 
-def extract_links(driver, base_url):
-    """Extract all same-origin links from the current page."""
-    try:
-        links = driver.run_js(
-            "return Array.from(document.querySelectorAll('a[href]'))"
-            ".map(a => a.href)"
-            ".filter(h => h.startsWith('http'))"
-        )
-        return [normalize_url(link) for link in links if link]
-    except Exception:
-        return []
-
-
-def run_axe(driver, axe_source, tags=None, rules=None):
-    """Inject axe-core into the current page and run accessibility analysis.
-
-    We inject the full axe-core JS library into every page (rather than loading
-    it from a URL) because the target site may have a Content-Security-Policy
-    that blocks external scripts.
-    """
-    # Step 1: Inject the axe-core library into the page's JS context.
-    try:
-        driver.run_js(axe_source)
-    except Exception as e:
-        return {'error': 'axe-core injection failed: {}'.format(str(e)[:100])}
-
-    # Step 2: Configure which rules/tags to run.
-    run_opts = {}
-    if rules:
-        run_opts['runOnly'] = {'type': 'rule', 'values': rules}
-    elif tags:
-        run_opts['runOnly'] = {'type': 'tag', 'values': tags}
-
-    # Step 3: Run axe.run() via the browser's async JS execution.
-    # SeleniumBrowser uses execute_async_script with a callback pattern;
-    # PlaywrightBrowser rewrites this into a native Promise await.
-    try:
-        results = driver.run_js_async(
-            """
-            var callback = arguments[arguments.length - 1];
-            var opts = arguments[0];
-            axe.run(document, opts).then(function(results) {
-                callback(results);
-            }).catch(function(err) {
-                callback({error: err.toString()});
-            });
-            """,
-            run_opts
-        )
-    except Exception as e:
-        return {'error': 'axe.run() failed: {}'.format(str(e)[:100])}
-    if results is None:
-        return {'error': 'axe.run() returned null (page may have navigated away)'}
-    return results
-
 
 def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                    include_paths=None, exclude_paths=None, exclude_regex=None,
@@ -959,8 +617,6 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     page_wait = _safe_int(config.get('page_wait', 1), 1)
     axe_source = load_axe_source()
     num_workers = _safe_int(config.get('workers', 1), 1)
-    driver_type = config.get('driver', 'selenium').lower()
-
     # Set up auth cookie header for http_status() pre-checks.
     # Without this, authenticated pages return 302→login to the HEAD
     # request and get skipped before the browser ever loads them.
@@ -970,26 +626,6 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         _http_cookie_header = '; '.join(
             '{}={}'.format(c['name'], c['value']) for c in _auth_cookies)
 
-    # For Playwright with multiple workers, we skip creating the sync browser
-    # entirely and go straight to async batch mode (sync and async Playwright
-    # can't coexist in the same process).
-    # Use async Playwright when multiple workers requested, or when a
-    # login_script is configured (the login plugin only runs in the
-    # async path).
-    auth = config.get('auth', {})
-    has_login_script = bool(auth.get('login_script', ''))
-    use_playwright_async = (driver_type == 'playwright'
-                            and (num_workers > 1 or has_login_script))
-    if use_playwright_async:
-        driver = None  # no sync browser — async sliding window creates its own
-    else:
-        driver = create_browser(config)
-        # Inject auth cookies if configured
-        auth_cookies = load_cookies(config)
-        if auth_cookies:
-            inject_cookies_selenium(driver, auth_cookies, start_url)
-            if not quiet:
-                print("  Loaded {} auth cookies".format(len(auth_cookies)))
     base_url = start_url
 
     # Initialize crawl state — either from a saved state file (--resume)
@@ -1096,126 +732,13 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             crawl_delay = int(delay)
     rate_limiter = RateLimiter(crawl_delay)
 
-    # Thread-safe locks for shared state
-    write_lock = threading.Lock()
-    print_lock = threading.Lock()
-    queue_lock = threading.Lock()
-
     def _vskip(url, reason):
         """Print a skip notice in verbose mode."""
         if verbose and not quiet:
-            with print_lock:
-                print("  skip: {} — {}".format(url, reason))
+            print("  skip: {} — {}".format(url, reason))
 
     # Content types that indicate an HTML page worth scanning.
     _HTML_TYPES = {'text/html', 'application/xhtml+xml', ''}
-
-    def _scan_one_page(browser, url):
-        """Scan a single page and return (url, page_data, new_links, elapsed) or None."""
-        page_timer = time.time()
-        status, content_type = http_status(url)
-
-        # Skip error pages (4xx/5xx) — server/Apache error pages,
-        # not application templates we can fix.
-        if status >= 400:
-            _vskip(url, "HTTP {}".format(status))
-            return None
-
-        # Skip non-HTML responses (JSON APIs, PDFs, etc.)
-        if content_type and content_type not in _HTML_TYPES:
-            _vskip(url, "not HTML ({})".format(content_type))
-            return None
-
-        # Enforce cross-worker rate limit (from robots.txt crawl-delay)
-        rate_limiter.wait()
-
-        try:
-            browser.navigate(url)
-            # Per-worker settle time for JS frameworks (MathJax, SPAs, etc.)
-            time.sleep(page_wait)
-
-            current = browser.current_url
-
-            # Redirected off-origin — skip
-            if not is_same_origin(current, base_url):
-                _vskip(url, "redirect off-origin → {}".format(current))
-                return None
-
-            # Same-origin redirect — use actual URL
-            actual_url = normalize_url(current)
-            with queue_lock:
-                if actual_url != url:
-                    if actual_url in visited:
-                        _vskip(url, "redirect → {} (already visited)".format(
-                            actual_url))
-                        return None
-                    visited.add(actual_url)
-                    if verbose and not quiet:
-                        with print_lock:
-                            print("  redirect: {} → {}".format(
-                                url, actual_url))
-                    url = actual_url
-
-            # Skip empty pages
-            page_html = (browser.page_source or '')
-            if len(page_html) < 100:
-                _vskip(url, "empty response ({} bytes)".format(
-                    len(page_html)))
-                return None
-
-            # Skip non-HTML responses — check both document.contentType
-            # (set by Chromium from the response headers) and the DOM.
-            # The HEAD pre-check may miss this if the server returns
-            # different headers for HEAD vs GET.
-            doc_ct = (browser.run_js(
-                "return document.contentType;") or '').lower()
-            if doc_ct and doc_ct not in _HTML_TYPES:
-                _vskip(url, "not HTML ({})".format(doc_ct))
-                return None
-            page_start = (browser.run_js(
-                "return document.documentElement.outerHTML.substring(0, 80);") or '')
-            if page_start and '<html' not in page_start.lower():
-                _vskip(url, "not HTML")
-                return None
-
-            results = run_axe(browser, axe_source, tags, rules)
-            if 'error' in results:
-                with print_lock:
-                    print("  ERROR on {}: {}".format(url, results['error']))
-                return None
-
-            # Log non-200 status in verbose mode (page is still scanned)
-            if verbose and not quiet and status and status != 200:
-                with print_lock:
-                    print("  notice: {} — HTTP {}".format(url, status))
-
-            violations = results.get('violations', [])
-            incomplete = results.get('incomplete', [])
-            passes = results.get('passes', [])
-
-            page_data = {
-                'url': url,
-                'timestamp': datetime.now().isoformat(),
-                'http_status': status if status != 0 else None,
-                'violations': violations,
-                'incomplete': incomplete,
-                'passes': passes,
-                'inapplicable': results.get('inapplicable', []),
-            }
-
-            # Discover new links (unless using a URL list or error page)
-            new_links = []
-            is_ok = (status == 0 or status < 400)
-            if not no_crawl and is_ok:
-                new_links = extract_links(browser, base_url)
-
-            elapsed = time.time() - page_timer
-            return (url, page_data, new_links, elapsed)
-
-        except Exception as e:
-            with print_lock:
-                print("  Error on {}: {}, skipping".format(url, str(e)[:100]))
-            return None
 
     # SIGTERM/SIGINT handler: flush partial results and save state.
     interrupted = False
@@ -1300,15 +823,6 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     except (AttributeError, OSError):
         pass  # SIGUSR1 not available on Windows
 
-    # Create browser pool.
-    # Selenium: one chromedriver + Chromium per worker (~300MB each).
-    # Playwright async mode: handled separately in the crawl loop below.
-    is_playwright = (driver_type == 'playwright')
-    browsers = [driver] if driver else []
-    if not is_playwright and num_workers > 1:
-        for _ in range(num_workers - 1):
-            browsers.append(create_browser(config))
-
     # Periodically restart the browser to prevent memory leaks.
     # Chromium accumulates garbage (DOM nodes, JS heaps, image caches) over
     # hundreds of pages, causing slowdowns and occasional 60s+ hangs.
@@ -1318,746 +832,577 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         print("  Workers: {} (parallel)".format(num_workers))
 
     try:
-        if num_workers <= 1 and not use_playwright_async:
-            # --- Serial mode (original behavior, no thread overhead) ---
-            while queue and page_count < max_pages and not interrupted:
-                url = queue.popleft()
-                if url in visited:
-                    continue
-                visited.add(url)
+        # --- Playwright async sliding window ---
+        # We maintain a sliding window of N concurrent async tasks.
+        # As each task finishes, we print its result immediately and
+        # start the next.
+        import asyncio
 
-                if not should_scan(url, base_url, include_paths, exclude_paths,
-                                   exclude_regex, robots_parser):
-                    continue
+        run_opts = {}
+        if rules:
+            run_opts['runOnly'] = {'type': 'rule', 'values': rules}
+        elif tags:
+            run_opts['runOnly'] = {'type': 'tag', 'values': tags}
 
-                page_count += 1
-                result = _scan_one_page(driver, url)
-
-                if result is not None:
-                    url, page_data, new_links, elapsed = result
-                    total_page_time += elapsed
-                    v_count = _count_nodes(page_data.get('violations', []))
-                    i_count = _count_nodes(page_data.get('incomplete', []))
-
-                    if not quiet:
-                        page_width = len(str(max_pages))
-                        status_parts = []
-                        if v_count:
-                            status_parts.append('{} violations'.format(v_count))
-                        if i_count:
-                            status_parts.append('{} incomplete'.format(i_count))
-                        status_str = ', '.join(status_parts) if status_parts else 'clean'
-                        print("[{}/{}] {} — {} ({:.1f}s)".format(
-                            str(page_count).rjust(page_width), max_pages,
-                            url, status_str, elapsed))
-                        if verbose:
-                            print(
-                                "  V: {} ({} nodes), I: {} ({} nodes),"
-                                " Queue: {}".format(
-                                    len(page_data['violations']),
-                                    v_count,
-                                    len(page_data['incomplete']),
-                                    i_count, len(queue)))
-
-                    _write_page(url, page_data)
-
-                    for link in new_links:
-                        if link not in visited and link not in queue:
-                            queue.append(link)
+        async def _pw_sliding_window():
+            nonlocal page_count, total_page_time
+            from playwright.async_api import async_playwright
+            async with async_playwright() as pw:
+                launch_args = [
+                    '--disable-dev-shm-usage', '--disable-gpu']
+                chromium_path = config.get('chromium_path')
+                ignore_certs = config.get(
+                    'ignore_certificate_errors') in (
+                    True, 'true', 'yes', '1')
+                if chromium_path and os.path.isfile(chromium_path):
+                    browser = await pw.chromium.launch(
+                        headless=True,
+                        executable_path=chromium_path,
+                        args=launch_args)
                 else:
-                    page_count -= 1
+                    browser = await pw.chromium.launch(
+                        headless=True, args=launch_args)
 
-                if json_path and save_every and page_count % save_every == 0:
-                    _flush()
+                try:
+                    _register_browser_pid(browser.process.pid)
+                except Exception:
+                    pass
 
-                # Restart browser periodically to prevent memory leaks
-                if (restart_every and page_count > 0
-                        and page_count % restart_every == 0):
-                    if not quiet:
-                        print("  [restarting browser after {} pages]".format(
-                            page_count))
-                    try:
-                        driver.quit()
-                    except Exception:
-                        pass
-                    driver = create_browser(config)
-                    # Re-inject auth cookies after restart
-                    auth_cookies = load_cookies(config)
-                    if auth_cookies:
-                        inject_cookies_selenium(
-                            driver, auth_cookies, start_url)
+                # Authenticate if a login_script plugin is configured.
+                # The plugin is a Python file with an async login(context, config)
+                # function that drives the browser to log in.
+                auth = config.get('auth', {})
+                login_script = auth.get('login_script', '')
+                context = None
+                _login_plugin = None
+                _recovery_mode = asyncio.Event()
+                _recovery_done = asyncio.Event()
+                _suspect_urls = []
+                if login_script:
+                    script_path = os.path.expanduser(login_script)
+                    if not os.path.isabs(script_path):
+                        script_path = os.path.join(SCRIPT_DIR, script_path)
+                    if os.path.isfile(script_path):
+                        import importlib.util
+                        spec = importlib.util.spec_from_file_location(
+                            'login_plugin', script_path)
+                        _login_plugin = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(_login_plugin)
 
-        elif use_playwright_async:
-            # --- Playwright parallel: async sliding window ---
-            # Instead of batching (which returns all at once), we maintain
-            # a sliding window of N concurrent async tasks.  As each task
-            # finishes, we print its result immediately and start the next.
-            import asyncio
-
-            run_opts = {}
-            if rules:
-                run_opts['runOnly'] = {'type': 'rule', 'values': rules}
-            elif tags:
-                run_opts['runOnly'] = {'type': 'tag', 'values': tags}
-
-            async def _pw_sliding_window():
-                nonlocal page_count, total_page_time
-                from playwright.async_api import async_playwright
-                async with async_playwright() as pw:
-                    launch_args = [
-                        '--disable-dev-shm-usage', '--disable-gpu']
-                    chromium_path = config.get('chromium_path')
-                    ignore_certs = config.get(
-                        'ignore_certificate_errors') in (
-                        True, 'true', 'yes', '1')
-                    if chromium_path and os.path.isfile(chromium_path):
-                        browser = await pw.chromium.launch(
-                            headless=True,
-                            executable_path=chromium_path,
-                            args=launch_args)
+                        context = await browser.new_context(
+                            viewport={'width': 1280, 'height': 1024},
+                            ignore_https_errors=ignore_certs)
+                        try:
+                            success = await _login_plugin.login(
+                                context, config)
+                        except Exception as e:
+                            if not quiet:
+                                print("  Login error: {}".format(e))
+                            success = False
+                        if not success:
+                            if not quiet:
+                                print("  Login failed — scanning as anonymous")
+                            await context.close()
+                            context = None
                     else:
-                        browser = await pw.chromium.launch(
-                            headless=True, args=launch_args)
+                        if not quiet:
+                            print("  Login script not found: {}".format(
+                                script_path))
 
+                async def _scan(url, worker_id=0,
+                                skip_rate_limit=False):
+                    """Scan one URL with Playwright."""
+                    # If in recovery mode, wait for recovery to finish
+                    if _recovery_mode.is_set():
+                        await _recovery_done.wait()
+
+                    page_t0 = time.time()
+                    loop = asyncio.get_event_loop()
+                    status, content_type = await loop.run_in_executor(
+                        None, http_status, url)
+                    if status >= 400:
+                        _vskip(url, "HTTP {}".format(status))
+                        return None
+                    if (content_type
+                            and content_type not in _HTML_TYPES):
+                        _vskip(url, "not HTML ({})".format(
+                            content_type))
+                        return None
+                    if context:
+                        page = await context.new_page()
+                    else:
+                        page = await browser.new_page(
+                            viewport={'width': 1280, 'height': 1024},
+                            ignore_https_errors=ignore_certs)
                     try:
-                        _register_browser_pid(browser.process.pid)
+                        # Rate limit: async sleep so we don't block
+                        # the event loop.  Skipped on initial
+                        # staggered starts (stagger already spaces
+                        # the requests correctly).
+                        if not skip_rate_limit:
+                            delay = rate_limiter.wait_time()
+                            if delay > 0:
+                                await asyncio.sleep(delay)
+                        await page.goto(url, wait_until='load')
+                        await page.wait_for_timeout(
+                            page_wait * 1000)
+
+                        # Check if session is still active.
+                        # If lost, add this URL to suspects and
+                        # trigger recovery mode.
+                        if (_login_plugin
+                                and hasattr(_login_plugin, 'is_logged_in')
+                                and not await _login_plugin.is_logged_in(page)):
+                            _suspect_urls.append(url)
+                            visited.discard(url)
+                            if not _recovery_mode.is_set():
+                                _recovery_mode.set()
+                                _recovery_done.clear()
+                            return None
+
+                        current = page.url
+                        if not is_same_origin(current, base_url):
+                            _vskip(url, "redirect off-origin → {}".format(
+                                current))
+                            return None
+                        actual = normalize_url(current)
+                        if actual != url:
+                            if actual in visited:
+                                _vskip(url, "redirect → {} (already visited)".format(
+                                    actual))
+                                return None
+                            visited.add(actual)
+                            if verbose and not quiet:
+                                print("  redirect: {} → {}".format(
+                                    url, actual))
+
+                        content = await page.content()
+                        if len(content or '') < 100:
+                            _vskip(url, "empty response ({} bytes)".format(
+                                len(content or '')))
+                            return None
+
+                        doc_ct = (await page.evaluate(
+                            "document.contentType") or '').lower()
+                        if doc_ct and doc_ct not in _HTML_TYPES:
+                            _vskip(url, "not HTML ({})".format(
+                                doc_ct))
+                            return None
+                        page_start = await page.evaluate(
+                            "document.documentElement.outerHTML"
+                            ".substring(0, 80)")
+                        if page_start and '<html' not in (
+                                page_start or '').lower():
+                            _vskip(url, "not HTML")
+                            return None
+
+                        await page.add_script_tag(
+                            content=axe_source)
+                        results = await page.evaluate(
+                            """(opts) => {
+                                return axe.run(document, opts)
+                                    .catch(e => (
+                                        {error: e.toString()}));
+                            }""", run_opts)
+                        if not results or 'error' in results:
+                            err = (results or {}).get(
+                                'error', 'unknown error')
+                            _vskip(url, "axe error: {}".format(err))
+                            return None
+
+                        # Log non-200 status (page is still scanned)
+                        if (verbose and not quiet
+                                and status and status != 200):
+                            print("  notice: {} — HTTP {}".format(
+                                url, status))
+
+                        new_links = []
+                        is_ok = (status == 0 or status < 400)
+                        if not no_crawl and is_ok:
+                            links = await page.evaluate(
+                                "Array.from(document"
+                                ".querySelectorAll('a[href]'))"
+                                ".map(a=>a.href)"
+                                ".filter(h=>"
+                                "h.startsWith('http'))")
+                            new_links = [
+                                normalize_url(lnk)
+                                for lnk in (links or []) if lnk]
+
+                        elapsed = time.time() - page_t0
+                        return (actual, {
+                            'url': actual,
+                            'timestamp':
+                                datetime.now().isoformat(),
+                            'http_status': (
+                                status if status != 0 else None),
+                            'violations':
+                                results.get('violations', []),
+                            'incomplete':
+                                results.get('incomplete', []),
+                            'passes':
+                                results.get('passes', []),
+                            'inapplicable':
+                                results.get('inapplicable', []),
+                        }, new_links, worker_id, elapsed)
                     except Exception:
-                        pass
+                        return None
+                    finally:
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
 
-                    # Authenticate if a login_script plugin is configured.
-                    # The plugin is a Python file with an async login(context, config)
-                    # function that drives the browser to log in.
-                    auth = config.get('auth', {})
-                    login_script = auth.get('login_script', '')
-                    context = None
-                    _login_plugin = None
-                    _recovery_mode = asyncio.Event()
-                    _recovery_done = asyncio.Event()
-                    _suspect_urls = []
-                    if login_script:
-                        script_path = os.path.expanduser(login_script)
-                        if not os.path.isabs(script_path):
-                            script_path = os.path.join(SCRIPT_DIR, script_path)
-                        if os.path.isfile(script_path):
-                            import importlib.util
-                            spec = importlib.util.spec_from_file_location(
-                                'login_plugin', script_path)
-                            _login_plugin = importlib.util.module_from_spec(spec)
-                            spec.loader.exec_module(_login_plugin)
+                # Merge plugin exclude_paths into the scan filter
+                _all_exclude = list(exclude_paths or [])
+                if (_login_plugin
+                        and hasattr(_login_plugin, 'exclude_paths')):
+                    _all_exclude.extend(_login_plugin.exclude_paths)
 
+                def _next_url():
+                    """Pull the next scannable URL from the queue."""
+                    while queue:
+                        url = queue.popleft()
+                        if url in visited or url in _logout_urls:
+                            continue
+                        visited.add(url)
+                        if should_scan(
+                                url, base_url, include_paths,
+                                _all_exclude, exclude_regex,
+                                robots_parser):
+                            return url
+                    return None
+
+                # Fill initial window with staggered starts.
+                # Worker IDs start at 1 for display.
+                pending = {}
+                next_worker_id = 1
+                # Stagger initial starts by the crawl delay (not
+                # page_wait) so each worker's first request is
+                # spaced at the rate limit interval.
+                stagger = max(crawl_delay, 1) if crawl_delay else (
+                    page_wait / max(num_workers, 1))
+
+                def _make_staggered(u, delay, w):
+                    """Factory to avoid closure capture bug."""
+
+                    async def _task():
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+                        return await _scan(
+                            u, worker_id=w, skip_rate_limit=True)
+                    return _task
+
+                for i in range(num_workers):
+                    url = _next_url()
+                    if url is None or page_count >= max_pages:
+                        break
+                    wid = next_worker_id
+                    next_worker_id += 1
+                    task = asyncio.create_task(
+                        _make_staggered(url, i * stagger, wid)())
+                    pending[task] = url
+
+                # Track which worker IDs are in use.
+                # task_workers maps task -> worker_id
+                task_workers = {}
+                active_wids = set()
+                for i, task in enumerate(pending.keys()):
+                    wid = i + 1
+                    task_workers[task] = wid
+                    active_wids.add(wid)
+
+                def _free_wid():
+                    """Return the lowest available worker ID."""
+                    for w in range(1, num_workers + 1):
+                        if w not in active_wids:
+                            return w
+                    return num_workers  # shouldn't happen
+
+                # Sliding window: as each finishes, print result,
+                # feed discovered links, fill empty worker slots.
+                while pending and not interrupted:
+                    done, _ = await asyncio.wait(
+                        pending.keys(),
+                        return_when=asyncio.FIRST_COMPLETED)
+
+                    # Collect freed worker IDs from completed tasks
+                    freed_wids = []
+                    for task in done:
+                        del pending[task]
+                        wid = task_workers.pop(task, 0)
+                        active_wids.discard(wid)
+                        freed_wids.append(wid)
+
+                        page_count += 1
+                        result = None
+                        try:
+                            result = task.result()
+                        except Exception:
+                            pass
+
+                        if result is not None:
+                            url, page_data, new_links, _, elapsed = result
+                            total_page_time += elapsed
+                            v_count = _count_nodes(
+                                page_data.get('violations', []))
+                            i_count = _count_nodes(
+                                page_data.get('incomplete', []))
+                            if not quiet:
+                                pw_w = len(str(max_pages))
+                                parts = []
+                                if v_count:
+                                    parts.append(
+                                        '{} violations'.format(
+                                            v_count))
+                                if i_count:
+                                    parts.append(
+                                        '{} incomplete'.format(
+                                            i_count))
+                                ss = (', '.join(parts)
+                                      if parts else 'clean')
+                                print("[{}/{}] W{} {} — {} ({:.1f}s)".format(
+                                    str(page_count).rjust(pw_w),
+                                    max_pages, wid, url, ss,
+                                    elapsed))
+                                if verbose:
+                                    print(
+                                        "  V: {} ({} nodes), I: {} ({} nodes),"
+                                        " Queue: {}".format(
+                                            len(page_data.get('violations', [])),
+                                            v_count,
+                                            len(page_data.get('incomplete', [])),
+                                            i_count, len(queue)))
+                            _write_page(url, page_data)
+
+                            for link in new_links:
+                                if (link not in visited
+                                        and link not in queue):
+                                    queue.append(link)
+                        else:
+                            page_count -= 1
+
+                    # Recovery mode: drain all workers, re-login,
+                    # test suspect URLs serially, then resume.
+                    if _recovery_mode.is_set() and _login_plugin and context:
+                        # Drain remaining in-flight tasks
+                        while pending:
+                            d2, _ = await asyncio.wait(
+                                pending.keys(),
+                                return_when=asyncio.FIRST_COMPLETED)
+                            for t2 in d2:
+                                del pending[t2]
+                                task_workers.pop(t2, None)
+                                try:
+                                    r2 = t2.result()
+                                except Exception:
+                                    r2 = None
+                                if r2 is not None:
+                                    page_count += 1
+                                    u2, pd2, nl2, _, el2 = r2
+                                    total_page_time += el2
+                                    _write_page(u2, pd2)
+                                    for lnk in nl2:
+                                        if (lnk not in visited
+                                                and lnk not in queue):
+                                            queue.append(lnk)
+                        active_wids.clear()
+
+                        if not quiet:
+                            print("  [recovery: {} suspect URLs, re-logging in]".format(
+                                len(_suspect_urls)))
+
+                        # Re-login
+                        try:
+                            await _login_plugin.login(context, config)
+                        except Exception:
+                            pass
+
+                        # Test each suspect URL serially
+                        safe_urls = []
+                        for surl in list(_suspect_urls):
+                            p = await context.new_page()
+                            try:
+                                await p.goto(surl, wait_until='load')
+                                await p.wait_for_timeout(2000)
+                                still_ok = await _login_plugin.is_logged_in(p)
+                                if still_ok:
+                                    safe_urls.append(surl)
+                                else:
+                                    # This URL caused logout
+                                    _logout_urls.add(surl)
+                                    if not quiet:
+                                        print("  [banned: {}]".format(surl))
+                                    # Re-login for next test
+                                    await p.close()
+                                    try:
+                                        await _login_plugin.login(
+                                            context, config)
+                                    except Exception:
+                                        pass
+                                    continue
+                            except Exception:
+                                safe_urls.append(surl)
+                            finally:
+                                try:
+                                    await p.close()
+                                except Exception:
+                                    pass
+
+                        # Requeue safe URLs
+                        for surl in safe_urls:
+                            if surl not in visited:
+                                queue.appendleft(surl)
+                        _suspect_urls.clear()
+
+                        _recovery_mode.clear()
+                        _recovery_done.set()
+
+                        if not quiet:
+                            print("  [recovery done: {} banned, {} requeued]".format(
+                                len(_logout_urls), len(safe_urls)))
+
+                    # Fill empty slots with freed worker IDs first,
+                    # then allocate new ones if needed.
+                    while (len(pending) < num_workers
+                           and page_count + len(pending) < max_pages):
+                        next_url = _next_url()
+                        if next_url is None:
+                            break
+                        if freed_wids:
+                            wid = freed_wids.pop(0)
+                        else:
+                            wid = _free_wid()
+                        active_wids.add(wid)
+                        t = asyncio.create_task(
+                            _scan(next_url, worker_id=wid))
+                        pending[t] = next_url
+                        task_workers[t] = wid
+
+                    if (json_path and save_every
+                            and page_count % save_every == 0):
+                        _flush()
+
+                    # Restart browser periodically to prevent memory leaks.
+                    # Wait for all in-flight pages to finish first.
+                    if (restart_every and page_count > 0
+                            and page_count % restart_every == 0
+                            and page_count < max_pages):
+                        # Drain remaining in-flight tasks
+                        while pending:
+                            done2, _ = await asyncio.wait(
+                                pending.keys(),
+                                return_when=asyncio.FIRST_COMPLETED)
+                            for t2 in done2:
+                                del pending[t2]
+                                task_workers.pop(t2, None)
+                                page_count += 1
+                                try:
+                                    r2 = t2.result()
+                                except Exception:
+                                    r2 = None
+                                if r2 is not None:
+                                    u2, pd2, nl2, _, el2 = r2
+                                    total_page_time += el2
+                                    _write_page(u2, pd2)
+                                    for lnk in nl2:
+                                        if (lnk not in visited
+                                                and lnk not in queue):
+                                            queue.append(lnk)
+                                else:
+                                    page_count -= 1
+                        # Restart
+                        if not quiet:
+                            print("  [restarting browser after"
+                                  " {} pages]".format(page_count))
+                        try:
+                            await browser.close()
+                        except Exception:
+                            pass
+                        launch_kw = {
+                            'headless': True, 'args': launch_args}
+                        if (chromium_path
+                                and os.path.isfile(chromium_path)):
+                            launch_kw['executable_path'] = (
+                                chromium_path)
+                        browser = await pw.chromium.launch(
+                            **launch_kw)
+                        try:
+                            _register_browser_pid(
+                                browser.process.pid)
+                        except Exception:
+                            pass
+                        active_wids.clear()
+
+                        # Re-authenticate after browser restart
+                        if _login_plugin:
                             context = await browser.new_context(
-                                viewport={'width': 1280, 'height': 1024},
+                                viewport={'width': 1280,
+                                          'height': 1024},
                                 ignore_https_errors=ignore_certs)
                             try:
                                 success = await _login_plugin.login(
                                     context, config)
+                                if success:
+                                    # Update cookie header for
+                                    # HTTP pre-checks
+                                    cookies = (
+                                        await context.cookies())
+                                    if cookies:
+                                        global _http_cookie_header
+                                        _http_cookie_header = (
+                                            '; '.join(
+                                                '{}={}'.format(
+                                                    c['name'],
+                                                    c['value'])
+                                                for c in cookies))
+                                elif not quiet:
+                                    print("  [re-login failed"
+                                          " after restart]")
                             except Exception as e:
                                 if not quiet:
-                                    print("  Login error: {}".format(e))
-                                success = False
-                            if not success:
-                                if not quiet:
-                                    print("  Login failed — scanning as anonymous")
-                                await context.close()
-                                context = None
-                        else:
-                            if not quiet:
-                                print("  Login script not found: {}".format(
-                                    script_path))
+                                    print("  [re-login error: {}]"
+                                          .format(e))
 
-                    async def _scan(url, worker_id=0,
-                                    skip_rate_limit=False):
-                        """Scan one URL — mirrors _scan_one_page."""
-                        # If in recovery mode, wait for recovery to finish
-                        if _recovery_mode.is_set():
-                            await _recovery_done.wait()
-
-                        page_t0 = time.time()
-                        loop = asyncio.get_event_loop()
-                        status, content_type = await loop.run_in_executor(
-                            None, http_status, url)
-                        if status >= 400:
-                            _vskip(url, "HTTP {}".format(status))
-                            return None
-                        if (content_type
-                                and content_type not in _HTML_TYPES):
-                            _vskip(url, "not HTML ({})".format(
-                                content_type))
-                            return None
-                        if context:
-                            page = await context.new_page()
-                        else:
-                            page = await browser.new_page(
-                                viewport={'width': 1280, 'height': 1024},
-                                ignore_https_errors=ignore_certs)
-                        try:
-                            # Rate limit: async sleep so we don't block
-                            # the event loop.  Skipped on initial
-                            # staggered starts (stagger already spaces
-                            # the requests correctly).
-                            if not skip_rate_limit:
-                                delay = rate_limiter.wait_time()
-                                if delay > 0:
-                                    await asyncio.sleep(delay)
-                            await page.goto(url, wait_until='load')
-                            await page.wait_for_timeout(
-                                page_wait * 1000)
-
-                            # Check if session is still active.
-                            # If lost, add this URL to suspects and
-                            # trigger recovery mode.
-                            if (_login_plugin
-                                    and hasattr(_login_plugin, 'is_logged_in')
-                                    and not await _login_plugin.is_logged_in(page)):
-                                _suspect_urls.append(url)
-                                visited.discard(url)
-                                if not _recovery_mode.is_set():
-                                    _recovery_mode.set()
-                                    _recovery_done.clear()
-                                return None
-
-                            current = page.url
-                            if not is_same_origin(current, base_url):
-                                _vskip(url, "redirect off-origin → {}".format(
-                                    current))
-                                return None
-                            actual = normalize_url(current)
-                            if actual != url:
-                                if actual in visited:
-                                    _vskip(url, "redirect → {} (already visited)".format(
-                                        actual))
-                                    return None
-                                visited.add(actual)
-                                if verbose and not quiet:
-                                    print("  redirect: {} → {}".format(
-                                        url, actual))
-
-                            content = await page.content()
-                            if len(content or '') < 100:
-                                _vskip(url, "empty response ({} bytes)".format(
-                                    len(content or '')))
-                                return None
-
-                            doc_ct = (await page.evaluate(
-                                "document.contentType") or '').lower()
-                            if doc_ct and doc_ct not in _HTML_TYPES:
-                                _vskip(url, "not HTML ({})".format(
-                                    doc_ct))
-                                return None
-                            page_start = await page.evaluate(
-                                "document.documentElement.outerHTML"
-                                ".substring(0, 80)")
-                            if page_start and '<html' not in (
-                                    page_start or '').lower():
-                                _vskip(url, "not HTML")
-                                return None
-
-                            await page.add_script_tag(
-                                content=axe_source)
-                            results = await page.evaluate(
-                                """(opts) => {
-                                    return axe.run(document, opts)
-                                        .catch(e => (
-                                            {error: e.toString()}));
-                                }""", run_opts)
-                            if not results or 'error' in results:
-                                err = (results or {}).get(
-                                    'error', 'unknown error')
-                                _vskip(url, "axe error: {}".format(err))
-                                return None
-
-                            # Log non-200 status (page is still scanned)
-                            if (verbose and not quiet
-                                    and status and status != 200):
-                                print("  notice: {} — HTTP {}".format(
-                                    url, status))
-
-                            new_links = []
-                            is_ok = (status == 0 or status < 400)
-                            if not no_crawl and is_ok:
-                                links = await page.evaluate(
-                                    "Array.from(document"
-                                    ".querySelectorAll('a[href]'))"
-                                    ".map(a=>a.href)"
-                                    ".filter(h=>"
-                                    "h.startsWith('http'))")
-                                new_links = [
-                                    normalize_url(lnk)
-                                    for lnk in (links or []) if lnk]
-
-                            elapsed = time.time() - page_t0
-                            return (actual, {
-                                'url': actual,
-                                'timestamp':
-                                    datetime.now().isoformat(),
-                                'http_status': (
-                                    status if status != 0 else None),
-                                'violations':
-                                    results.get('violations', []),
-                                'incomplete':
-                                    results.get('incomplete', []),
-                                'passes':
-                                    results.get('passes', []),
-                                'inapplicable':
-                                    results.get('inapplicable', []),
-                            }, new_links, worker_id, elapsed)
-                        except Exception:
-                            return None
-                        finally:
-                            try:
-                                await page.close()
-                            except Exception:
-                                pass
-
-                    # Merge plugin exclude_paths into the scan filter
-                    _all_exclude = list(exclude_paths or [])
-                    if (_login_plugin
-                            and hasattr(_login_plugin, 'exclude_paths')):
-                        _all_exclude.extend(_login_plugin.exclude_paths)
-
-                    def _next_url():
-                        """Pull the next scannable URL from the queue."""
-                        while queue:
-                            url = queue.popleft()
-                            if url in visited or url in _logout_urls:
-                                continue
-                            visited.add(url)
-                            if should_scan(
-                                    url, base_url, include_paths,
-                                    _all_exclude, exclude_regex,
-                                    robots_parser):
-                                return url
-                        return None
-
-                    # Fill initial window with staggered starts.
-                    # Worker IDs start at 1 for display.
-                    pending = {}
-                    next_worker_id = 1
-                    # Stagger initial starts by the crawl delay (not
-                    # page_wait) so each worker's first request is
-                    # spaced at the rate limit interval.
-                    stagger = max(crawl_delay, 1) if crawl_delay else (
-                        page_wait / max(num_workers, 1))
-
-                    def _make_staggered(u, delay, w):
-                        """Factory to avoid closure capture bug."""
-
-                        async def _task():
-                            if delay > 0:
-                                await asyncio.sleep(delay)
-                            return await _scan(
-                                u, worker_id=w, skip_rate_limit=True)
-                        return _task
-
-                    for i in range(num_workers):
-                        url = _next_url()
-                        if url is None or page_count >= max_pages:
-                            break
-                        wid = next_worker_id
-                        next_worker_id += 1
-                        task = asyncio.create_task(
-                            _make_staggered(url, i * stagger, wid)())
-                        pending[task] = url
-
-                    # Track which worker IDs are in use.
-                    # task_workers maps task -> worker_id
-                    task_workers = {}
-                    active_wids = set()
-                    for i, task in enumerate(pending.keys()):
-                        wid = i + 1
-                        task_workers[task] = wid
-                        active_wids.add(wid)
-
-                    def _free_wid():
-                        """Return the lowest available worker ID."""
-                        for w in range(1, num_workers + 1):
-                            if w not in active_wids:
-                                return w
-                        return num_workers  # shouldn't happen
-
-                    # Sliding window: as each finishes, print result,
-                    # feed discovered links, fill empty worker slots.
-                    while pending and not interrupted:
-                        done, _ = await asyncio.wait(
-                            pending.keys(),
-                            return_when=asyncio.FIRST_COMPLETED)
-
-                        # Collect freed worker IDs from completed tasks
-                        freed_wids = []
-                        for task in done:
-                            del pending[task]
-                            wid = task_workers.pop(task, 0)
-                            active_wids.discard(wid)
-                            freed_wids.append(wid)
-
-                            page_count += 1
-                            result = None
-                            try:
-                                result = task.result()
-                            except Exception:
-                                pass
-
-                            if result is not None:
-                                url, page_data, new_links, _, elapsed = result
-                                total_page_time += elapsed
-                                v_count = _count_nodes(
-                                    page_data.get('violations', []))
-                                i_count = _count_nodes(
-                                    page_data.get('incomplete', []))
-                                if not quiet:
-                                    pw_w = len(str(max_pages))
-                                    parts = []
-                                    if v_count:
-                                        parts.append(
-                                            '{} violations'.format(
-                                                v_count))
-                                    if i_count:
-                                        parts.append(
-                                            '{} incomplete'.format(
-                                                i_count))
-                                    ss = (', '.join(parts)
-                                          if parts else 'clean')
-                                    print("[{}/{}] W{} {} — {} ({:.1f}s)".format(
-                                        str(page_count).rjust(pw_w),
-                                        max_pages, wid, url, ss,
-                                        elapsed))
-                                    if verbose:
-                                        print(
-                                            "  V: {} ({} nodes), I: {} ({} nodes),"
-                                            " Queue: {}".format(
-                                                len(page_data.get('violations', [])),
-                                                v_count,
-                                                len(page_data.get('incomplete', [])),
-                                                i_count, len(queue)))
-                                _write_page(url, page_data)
-
-                                for link in new_links:
-                                    if (link not in visited
-                                            and link not in queue):
-                                        queue.append(link)
-                            else:
-                                page_count -= 1
-
-                        # Recovery mode: drain all workers, re-login,
-                        # test suspect URLs serially, then resume.
-                        if _recovery_mode.is_set() and _login_plugin and context:
-                            # Drain remaining in-flight tasks
-                            while pending:
-                                d2, _ = await asyncio.wait(
-                                    pending.keys(),
-                                    return_when=asyncio.FIRST_COMPLETED)
-                                for t2 in d2:
-                                    del pending[t2]
-                                    task_workers.pop(t2, None)
-                                    try:
-                                        r2 = t2.result()
-                                    except Exception:
-                                        r2 = None
-                                    if r2 is not None:
-                                        page_count += 1
-                                        u2, pd2, nl2, _, el2 = r2
-                                        total_page_time += el2
-                                        _write_page(u2, pd2)
-                                        for lnk in nl2:
-                                            if (lnk not in visited
-                                                    and lnk not in queue):
-                                                queue.append(lnk)
-                            active_wids.clear()
-
-                            if not quiet:
-                                print("  [recovery: {} suspect URLs, re-logging in]".format(
-                                    len(_suspect_urls)))
-
-                            # Re-login
-                            try:
-                                await _login_plugin.login(context, config)
-                            except Exception:
-                                pass
-
-                            # Test each suspect URL serially
-                            safe_urls = []
-                            for surl in list(_suspect_urls):
-                                p = await context.new_page()
-                                try:
-                                    await p.goto(surl, wait_until='load')
-                                    await p.wait_for_timeout(2000)
-                                    still_ok = await _login_plugin.is_logged_in(p)
-                                    if still_ok:
-                                        safe_urls.append(surl)
-                                    else:
-                                        # This URL caused logout
-                                        _logout_urls.add(surl)
-                                        if not quiet:
-                                            print("  [banned: {}]".format(surl))
-                                        # Re-login for next test
-                                        await p.close()
-                                        try:
-                                            await _login_plugin.login(
-                                                context, config)
-                                        except Exception:
-                                            pass
-                                        continue
-                                except Exception:
-                                    safe_urls.append(surl)
-                                finally:
-                                    try:
-                                        await p.close()
-                                    except Exception:
-                                        pass
-
-                            # Requeue safe URLs
-                            for surl in safe_urls:
-                                if surl not in visited:
-                                    queue.appendleft(surl)
-                            _suspect_urls.clear()
-
-                            _recovery_mode.clear()
-                            _recovery_done.set()
-
-                            if not quiet:
-                                print("  [recovery done: {} banned, {} requeued]".format(
-                                    len(_logout_urls), len(safe_urls)))
-
-                        # Fill empty slots with freed worker IDs first,
-                        # then allocate new ones if needed.
-                        while (len(pending) < num_workers
-                               and page_count + len(pending) < max_pages):
+                        # Refill the sliding window after restart
+                        for i in range(num_workers):
+                            if page_count + len(pending) >= max_pages:
+                                break
                             next_url = _next_url()
                             if next_url is None:
                                 break
-                            if freed_wids:
-                                wid = freed_wids.pop(0)
-                            else:
-                                wid = _free_wid()
+                            wid = i + 1
                             active_wids.add(wid)
                             t = asyncio.create_task(
                                 _scan(next_url, worker_id=wid))
                             pending[t] = next_url
                             task_workers[t] = wid
 
-                        if (json_path and save_every
-                                and page_count % save_every == 0):
-                            _flush()
-
-                        # Restart browser periodically to prevent memory leaks.
-                        # Wait for all in-flight pages to finish first.
-                        if (restart_every and page_count > 0
-                                and page_count % restart_every == 0
-                                and page_count < max_pages):
-                            # Drain remaining in-flight tasks
-                            while pending:
-                                done2, _ = await asyncio.wait(
-                                    pending.keys(),
-                                    return_when=asyncio.FIRST_COMPLETED)
-                                for t2 in done2:
-                                    del pending[t2]
-                                    task_workers.pop(t2, None)
-                                    page_count += 1
-                                    try:
-                                        r2 = t2.result()
-                                    except Exception:
-                                        r2 = None
-                                    if r2 is not None:
-                                        u2, pd2, nl2, _, el2 = r2
-                                        total_page_time += el2
-                                        _write_page(u2, pd2)
-                                        for lnk in nl2:
-                                            if (lnk not in visited
-                                                    and lnk not in queue):
-                                                queue.append(lnk)
-                                    else:
-                                        page_count -= 1
-                            # Restart
-                            if not quiet:
-                                print("  [restarting browser after"
-                                      " {} pages]".format(page_count))
-                            try:
-                                await browser.close()
-                            except Exception:
-                                pass
-                            launch_kw = {
-                                'headless': True, 'args': launch_args}
-                            if (chromium_path
-                                    and os.path.isfile(chromium_path)):
-                                launch_kw['executable_path'] = (
-                                    chromium_path)
-                            browser = await pw.chromium.launch(
-                                **launch_kw)
-                            try:
-                                _register_browser_pid(
-                                    browser.process.pid)
-                            except Exception:
-                                pass
-                            active_wids.clear()
-
-                            # Re-authenticate after browser restart
-                            if _login_plugin:
-                                context = await browser.new_context(
-                                    viewport={'width': 1280,
-                                              'height': 1024},
-                                    ignore_https_errors=ignore_certs)
-                                try:
-                                    success = await _login_plugin.login(
-                                        context, config)
-                                    if success:
-                                        # Update cookie header for
-                                        # HTTP pre-checks
-                                        cookies = (
-                                            await context.cookies())
-                                        if cookies:
-                                            global _http_cookie_header
-                                            _http_cookie_header = (
-                                                '; '.join(
-                                                    '{}={}'.format(
-                                                        c['name'],
-                                                        c['value'])
-                                                    for c in cookies))
-                                    elif not quiet:
-                                        print("  [re-login failed"
-                                              " after restart]")
-                                except Exception as e:
-                                    if not quiet:
-                                        print("  [re-login error: {}]"
-                                              .format(e))
-
-                            # Refill the sliding window after restart
-                            for i in range(num_workers):
-                                if page_count + len(pending) >= max_pages:
-                                    break
-                                next_url = _next_url()
-                                if next_url is None:
-                                    break
-                                wid = i + 1
-                                active_wids.add(wid)
-                                t = asyncio.create_task(
-                                    _scan(next_url, worker_id=wid))
-                                pending[t] = next_url
-                                task_workers[t] = wid
-
-                    # Cancel any in-flight tasks (e.g. after ^C) so
-                    # Python doesn't dump "Task exception was never
-                    # retrieved" tracebacks at shutdown.
-                    for task in list(pending.keys()):
-                        task.cancel()
-                    for task in list(pending.keys()):
-                        try:
-                            await task
-                        except (asyncio.CancelledError, Exception):
-                            pass
-
+                # Cancel any in-flight tasks (e.g. after ^C) so
+                # Python doesn't dump "Task exception was never
+                # retrieved" tracebacks at shutdown.
+                for task in list(pending.keys()):
+                    task.cancel()
+                for task in list(pending.keys()):
                     try:
-                        await browser.close()
-                    except Exception:
+                        await task
+                    except (asyncio.CancelledError, Exception):
                         pass
 
-            try:
-                asyncio.run(_pw_sliding_window())
-            except (KeyboardInterrupt, SystemExit):
-                _cleanup_browsers()
-            except Exception as e:
-                print("  Playwright error: {}".format(e), file=sys.stderr)
-                _cleanup_browsers()
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
 
-        else:
-            # --- Selenium parallel: thread pool with separate browsers ---
-            with ThreadPoolExecutor(max_workers=num_workers) as pool:
-                while queue and page_count < max_pages and not interrupted:
-                    futures = {}
-                    while queue and len(futures) < num_workers and \
-                            page_count + len(futures) < max_pages:
-                        url = queue.popleft()
-                        if url in visited:
-                            continue
-                        visited.add(url)
-                        if not should_scan(url, base_url, include_paths,
-                                           exclude_paths, exclude_regex,
-                                           robots_parser=robots_parser):
-                            continue
-                        browser_idx = len(futures) % num_workers
-                        # Stagger starts so results stream evenly
-                        stagger = page_wait / max(num_workers, 1)
-                        if len(futures) > 0:
-                            time.sleep(stagger)
-                        future = pool.submit(
-                            _scan_one_page, browsers[browser_idx], url)
-                        futures[future] = url
-
-                    if not futures:
-                        break
-
-                    for future in as_completed(futures):
-                        page_count += 1
-                        result = future.result()
-
-                        if result is not None:
-                            url, page_data, new_links, elapsed = result
-                            total_page_time += elapsed
-                            v_count = _count_nodes(
-                                page_data.get('violations', []))
-                            i_count = _count_nodes(
-                                page_data.get('incomplete', []))
-
-                            with print_lock:
-                                if not quiet:
-                                    pw = len(str(max_pages))
-                                    parts = []
-                                    if v_count:
-                                        parts.append(
-                                            '{} violations'.format(v_count))
-                                    if i_count:
-                                        parts.append(
-                                            '{} incomplete'.format(i_count))
-                                    ss = ', '.join(parts) if parts else 'clean'
-                                    print("[{}/{}] {} — {} ({:.1f}s)".format(
-                                        str(page_count).rjust(pw),
-                                        max_pages, url, ss, elapsed))
-                                    if verbose:
-                                        print(
-                                            "  V: {} ({} nodes), I: {} ({} nodes),"
-                                            " Queue: {}".format(
-                                                len(page_data.get('violations', [])),
-                                                v_count,
-                                                len(page_data.get('incomplete', [])),
-                                                i_count, len(queue)))
-
-                            with write_lock:
-                                _write_page(url, page_data)
-
-                            with queue_lock:
-                                for link in new_links:
-                                    if link not in visited and \
-                                            link not in queue:
-                                        queue.append(link)
-                        else:
-                            page_count -= 1
-
-                    if json_path and save_every and \
-                            page_count % save_every == 0:
-                        _flush()
-
-                    # Restart all browsers periodically to prevent
-                    # memory leaks.  Safe here because all futures from
-                    # the current batch have completed.
-                    if (restart_every and page_count > 0
-                            and page_count % restart_every == 0
-                            and page_count < max_pages):
-                        if not quiet:
-                            print("  [restarting {} browsers after"
-                                  " {} pages]".format(
-                                      len(browsers), page_count))
-                        for i, b in enumerate(browsers):
-                            try:
-                                b.quit()
-                            except Exception:
-                                pass
-                            browsers[i] = create_browser(config)
+        try:
+            asyncio.run(_pw_sliding_window())
+        except (KeyboardInterrupt, SystemExit):
+            _cleanup_browsers()
+        except Exception as e:
+            print("  Playwright error: {}".format(e), file=sys.stderr)
+            _cleanup_browsers()
 
     finally:
-        for browser in browsers:
-            try:
-                browser.quit()
-            except Exception:
-                pass
         _flush(reason='final')
         _save_state()
 
@@ -2674,8 +2019,6 @@ def main():
                         help='Output directory (default: from config or current directory)')
     parser.add_argument('--allowlist', default=None,
                         help='YAML file of known-acceptable incompletes to suppress')
-    parser.add_argument('--driver', default=None, choices=['selenium', 'playwright'],
-                        help='Browser driver: selenium (default) or playwright (~2x faster)')
     parser.add_argument('--workers', type=int, default=None,
                         help='Number of parallel browser instances (default: 1). '
                              'Each uses ~200-500MB RAM. Rate limits are shared.')
@@ -2924,9 +2267,6 @@ OTHER NOTES
     save_every = args.save_every or _safe_int(config.get('save_every', 25), 25)
 
     # Workers: number of parallel browser instances
-    # CLI overrides for config
-    if args.driver:
-        config['driver'] = args.driver
     if args.workers:
         config['workers'] = args.workers
     basename = args.output or 'axe-spyder-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
