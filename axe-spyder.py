@@ -1506,6 +1506,138 @@ def _iter_jsonl(jsonl_path):
                 yield url, data
 
 
+def _iter_report(path):
+    """Iterate (url, data) pairs from a JSON or JSONL report file.
+
+    Auto-detects format: if the file parses as a JSON object, iterates
+    its key-value pairs. Otherwise falls back to JSONL line-by-line.
+    """
+    with open(path, 'r') as f:
+        first = f.read(1)
+        f.seek(0)
+        if first == '{':
+            try:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    for url, page_data in data.items():
+                        if isinstance(page_data, dict):
+                            yield url, page_data
+                    return
+            except (json.JSONDecodeError, ValueError):
+                f.seek(0)
+    # Fall back to JSONL
+    yield from _iter_jsonl(path)
+
+
+def _extract_urls_from_report(path, which='violations'):
+    """Extract URLs with violations or incompletes from a report file."""
+    urls = []
+    for url, data in _iter_report(path):
+        if data.get(which):
+            urls.append(url)
+    return urls
+
+
+def _group_results(jsonl_path, group_by, allowlist=None):
+    """Group scan results and print a summary table.
+
+    group_by: 'rule', 'selector', 'color', 'reason', 'wcag'
+    """
+    import re
+    from collections import Counter
+
+    groups = Counter()
+    group_pages = {}
+    group_examples = {}
+
+    for url, data in _iter_jsonl(jsonl_path):
+        for category in ('violations', 'incomplete'):
+            for item in data.get(category, []):
+                rule_id = item.get('id', 'unknown')
+                tags = item.get('tags', [])
+                for node in item.get('nodes', []):
+                    target = node.get('target', ['?'])[0]
+                    html = node.get('html', '')[:120]
+
+                    # Get the check message
+                    msg = ''
+                    for ct in ('any', 'all', 'none'):
+                        for c in node.get(ct, []):
+                            if c.get('message'):
+                                msg = c['message']
+                                break
+                        if msg:
+                            break
+
+                    # Determine group key
+                    if group_by == 'rule':
+                        key = '{} ({})'.format(
+                            rule_id, category[:3])
+                    elif group_by == 'selector':
+                        # Normalize: strip IDs, nth-child numbers
+                        key = re.sub(
+                            r'#[a-zA-Z_][\w-]*', '#ID', target)
+                        key = re.sub(
+                            r'nth-child\(\d+\)', 'nth-child(N)', key)
+                        key = re.sub(r'\[.*?\]', '', key)
+                    elif group_by == 'color':
+                        m = re.search(
+                            r'foreground color: (#\w+).*'
+                            r'background color: (#\w+)', msg)
+                        if m:
+                            key = '{} on {}'.format(
+                                m.group(1), m.group(2))
+                        else:
+                            key = '(no color info)'
+                    elif group_by == 'reason':
+                        if 'gradient' in msg:
+                            key = 'background gradient'
+                        elif 'overlapped' in msg or 'overlap' in msg:
+                            key = 'element overlap'
+                        elif 'pseudo' in msg:
+                            key = 'pseudo-element'
+                        elif 'background image' in msg:
+                            key = 'background image'
+                        elif '1:1' in msg:
+                            key = '1:1 (transparent text)'
+                        elif 'too short' in msg:
+                            key = 'content too short'
+                        elif 'could not be determined' in msg:
+                            key = 'background undetermined'
+                        elif msg:
+                            key = msg[:50]
+                        else:
+                            key = '(no message)'
+                    elif group_by == 'wcag':
+                        scs = _parse_wcag_sc(tags)
+                        key = ', '.join(scs) if scs else rule_id
+                    else:
+                        key = rule_id
+
+                    groups[key] += 1
+                    if key not in group_pages:
+                        group_pages[key] = set()
+                    group_pages[key].add(url)
+                    if key not in group_examples:
+                        group_examples[key] = {
+                            'url': url, 'target': target,
+                            'html': html, 'rule': rule_id}
+
+    # Print summary
+    total = sum(groups.values())
+    print("\n  Grouped by {}: {} nodes in {} groups\n".format(
+        group_by, total, len(groups)))
+    for key, count in groups.most_common():
+        pages = len(group_pages[key])
+        ex = group_examples[key]
+        print("  {:>5d}  {} ({} pages)".format(count, key, pages))
+        if group_by != 'rule':
+            print("         rule: {}".format(ex['rule']))
+        print("         e.g. {}".format(ex['url']))
+        print("              {}".format(ex['target'][:70]))
+        print()
+
+
 def generate_html_report(jsonl_path, output_path, start_url,
                          level_label='WCAG 2.1 Level AA', allowlist=None):
     """Generate an HTML report by streaming through JSONL results on disk.
@@ -2112,6 +2244,17 @@ def main():
                         help='Scan URLs from a file (one per line) instead of crawling')
     parser.add_argument('--rescan', default=None, metavar='PREV.jsonl',
                         help='Re-scan only pages that had violations or incompletes in a previous scan')
+    parser.add_argument('--violations-from', default=None, metavar='REPORT',
+                        help='Extract and re-scan only pages with violations from a previous JSON or JSONL report')
+    parser.add_argument('--incompletes-from', default=None, metavar='REPORT',
+                        help='Extract and re-scan only pages with incompletes from a previous JSON or JSONL report')
+    parser.add_argument('--group-by', default=None,
+                        choices=['rule', 'selector', 'color', 'reason', 'wcag'],
+                        help='After scanning, print a grouped summary. '
+                             'rule: by axe rule ID. selector: by CSS selector pattern. '
+                             'color: by foreground/background color pair. '
+                             'reason: by incomplete reason category. '
+                             'wcag: by WCAG success criterion.')
     parser.add_argument('--resume', default=None, metavar='STATE.json',
                         help='Resume a previous crawl from its saved state file')
     parser.add_argument('--rule', action='append', default=None,
@@ -2277,6 +2420,26 @@ OTHER NOTES
             print("No failures in previous scan — nothing to rescan.")
             sys.exit(0)
         print("Rescanning {} pages with previous violations/incompletes".format(len(seed_urls)))
+    if args.violations_from:
+        if not os.path.exists(args.violations_from):
+            parser.error('Report not found: {}'.format(args.violations_from))
+        seed_urls = _extract_urls_from_report(args.violations_from, 'violations')
+        if not seed_urls:
+            print("No violations in previous report — nothing to rescan.")
+            sys.exit(0)
+        print("Rescanning {} pages with previous violations".format(len(seed_urls)))
+        if not url:
+            url = seed_urls[0]
+    if args.incompletes_from:
+        if not os.path.exists(args.incompletes_from):
+            parser.error('Report not found: {}'.format(args.incompletes_from))
+        seed_urls = _extract_urls_from_report(args.incompletes_from, 'incomplete')
+        if not seed_urls:
+            print("No incompletes in previous report — nothing to rescan.")
+            sys.exit(0)
+        print("Rescanning {} pages with previous incompletes".format(len(seed_urls)))
+        if not url:
+            url = seed_urls[0]
     if args.urls:
         if not os.path.exists(args.urls):
             parser.error('URL file not found: {}'.format(args.urls))
@@ -2456,6 +2619,10 @@ OTHER NOTES
             diff_scans(args.diff, jsonl_path, allowlist=allowlist)
         else:
             print("\nWARNING: diff file not found: {}".format(args.diff))
+
+    # Group-by summary
+    if args.group_by and jsonl_path and os.path.exists(jsonl_path):
+        _group_results(jsonl_path, args.group_by, allowlist=allowlist)
 
     # Exit code: 0 = clean, 1 = violations found
     if total_violations > 0:
