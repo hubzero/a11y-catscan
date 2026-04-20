@@ -617,7 +617,15 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     wait_strategy = config.get('wait_until', 'networkidle')
     if wait_strategy not in ('networkidle', 'load', 'domcontentloaded', 'commit'):
         wait_strategy = 'networkidle'
-    axe_source = load_axe_source()
+    engine = config.get('engine', 'axe')
+    if engine not in ('axe', 'alfa', 'both'):
+        engine = 'axe'
+    use_axe = engine in ('axe', 'both')
+    use_alfa = engine in ('alfa', 'both')
+    if use_axe:
+        axe_source = load_axe_source()
+    else:
+        axe_source = None
     num_workers = _safe_int(config.get('workers', 1), 1)
     # Set up auth cookie header for any http_status() utility calls.
     global _http_cookie_header
@@ -845,11 +853,14 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             run_opts['runOnly'] = {'type': 'tag', 'values': tags}
 
         async def _pw_sliding_window():
-            nonlocal page_count, total_page_time
+            nonlocal page_count, total_page_time, use_alfa
             from playwright.async_api import async_playwright
             async with async_playwright() as pw:
                 launch_args = [
                     '--disable-dev-shm-usage', '--disable-gpu']
+                if use_alfa:
+                    launch_args.append(
+                        '--remote-debugging-port=9222')
                 chromium_path = config.get('chromium_path')
                 ignore_certs = config.get(
                     'ignore_certificate_errors') in (
@@ -981,6 +992,69 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             print("  Login script not found: {}".format(
                                 script_path))
 
+                # Start Alfa subprocess if needed
+                _alfa_proc = None
+                _alfa_lock = asyncio.Lock()
+                if use_alfa:
+                    import urllib.request as _urlreq
+                    try:
+                        _cdp_info = json.loads(_urlreq.urlopen(
+                            'http://127.0.0.1:9222/json/version',
+                            timeout=5).read())
+                        _cdp_ws = _cdp_info['webSocketDebuggerUrl']
+                    except Exception as e:
+                        if not quiet:
+                            print("  Alfa: CDP not available"
+                                  " — {}".format(e))
+                        use_alfa = False
+
+                if use_alfa:
+                    _node_path = os.path.join(
+                        os.path.expanduser('~/local/bin'), 'node')
+                    if not os.path.isfile(_node_path):
+                        _node_path = 'node'
+                    _alfa_script = os.path.join(
+                        SCRIPT_DIR, 'alfa-engine.mjs')
+                    _env = os.environ.copy()
+                    _env['PATH'] = (
+                        os.path.expanduser('~/local/bin')
+                        + ':' + _env.get('PATH', ''))
+                    _alfa_proc = await asyncio.create_subprocess_exec(
+                        _node_path, _alfa_script,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        cwd=SCRIPT_DIR, env=_env)
+                    # Send init with CDP endpoint and level
+                    _alfa_level = 'aa'
+                    if level and 'aaa' in level:
+                        _alfa_level = 'aaa'
+                    elif level and 'a' in level and 'aa' not in level:
+                        _alfa_level = 'a'
+                    init_msg = json.dumps({
+                        'cdp': _cdp_ws,
+                        'level': _alfa_level}) + '\n'
+                    _alfa_proc.stdin.write(init_msg.encode())
+                    await _alfa_proc.stdin.drain()
+                    ready_line = await _alfa_proc.stdout.readline()
+                    ready = json.loads(ready_line)
+                    if not quiet:
+                        print("  Alfa: {} rules at level {}".format(
+                            ready.get('rules', '?'),
+                            ready.get('level', '?')))
+
+                async def _run_alfa(page_url):
+                    """Send a page to Alfa for scanning, return results."""
+                    if not _alfa_proc or _alfa_proc.returncode is not None:
+                        return None
+                    async with _alfa_lock:
+                        msg = json.dumps({'pageId': page_url}) + '\n'
+                        _alfa_proc.stdin.write(msg.encode())
+                        await _alfa_proc.stdin.drain()
+                        line = await asyncio.wait_for(
+                            _alfa_proc.stdout.readline(),
+                            timeout=120)
+                        return json.loads(line)
+
                 async def _scan(url, worker_id=0,
                                 skip_rate_limit=False):
                     """Scan one URL with Playwright."""
@@ -1085,18 +1159,103 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             _vskip(url, "not HTML")
                             return None
 
-                        await page.add_script_tag(
-                            content=axe_source)
-                        results = await page.evaluate(
-                            """(opts) => {
-                                return axe.run(document, opts)
-                                    .catch(e => (
-                                        {error: e.toString()}));
-                            }""", run_opts)
-                        if not results or 'error' in results:
-                            err = (results or {}).get(
-                                'error', 'unknown error')
-                            _vskip(url, "axe error: {}".format(err))
+                        # Run engines
+                        results = {'violations': [],
+                                   'incomplete': [],
+                                   'passes': [],
+                                   'inapplicable': []}
+
+                        # axe-core engine
+                        if use_axe and axe_source:
+                            await page.add_script_tag(
+                                content=axe_source)
+                            axe_results = await page.evaluate(
+                                """(opts) => {
+                                    return axe.run(document, opts)
+                                        .catch(e => (
+                                            {error: e.toString()}));
+                                }""", run_opts)
+                            if axe_results and 'error' not in axe_results:
+                                results['violations'].extend(
+                                    axe_results.get('violations', []))
+                                results['incomplete'].extend(
+                                    axe_results.get('incomplete', []))
+                                results['passes'].extend(
+                                    axe_results.get('passes', []))
+                                results['inapplicable'].extend(
+                                    axe_results.get('inapplicable', []))
+                            elif use_axe and not use_alfa:
+                                err = (axe_results or {}).get(
+                                    'error', 'unknown error')
+                                _vskip(url, "axe error: {}".format(err))
+                                return None
+
+                        # Alfa engine (via CDP subprocess)
+                        if use_alfa and _alfa_proc:
+                            try:
+                                alfa_result = await _run_alfa(
+                                    page.url)
+                                if (alfa_result
+                                        and alfa_result.get('ok')):
+                                    # Convert Alfa results to
+                                    # axe-compatible format
+                                    for v in alfa_result.get(
+                                            'violations', []):
+                                        results['violations'].append({
+                                            'id': v['rule'],
+                                            'engine': 'alfa',
+                                            'description': v.get(
+                                                'message', ''),
+                                            'help': v.get(
+                                                'message', ''),
+                                            'helpUrl': v.get(
+                                                'uri', ''),
+                                            'impact': 'serious',
+                                            'tags': [
+                                                'wcag2' + sc.replace(
+                                                    '.', '')
+                                                for sc in v.get(
+                                                    'wcag', [])],
+                                            'nodes': [{
+                                                'target': [v.get(
+                                                    'target', '')],
+                                                'html': v.get(
+                                                    'html', ''),
+                                                'any': [{
+                                                    'message': v.get(
+                                                        'message',
+                                                        '')}],
+                                            }],
+                                        })
+                                    for i in alfa_result.get(
+                                            'incomplete', []):
+                                        results['incomplete'].append({
+                                            'id': i['rule'],
+                                            'engine': 'alfa',
+                                            'help': i.get(
+                                                'message', ''),
+                                            'helpUrl': i.get(
+                                                'uri', ''),
+                                            'impact': 'moderate',
+                                            'nodes': [{
+                                                'target': [i.get(
+                                                    'target', '')],
+                                                'html': i.get(
+                                                    'html', ''),
+                                                'any': [{
+                                                    'message': i.get(
+                                                        'message',
+                                                        '')}],
+                                            }],
+                                        })
+                            except Exception as e:
+                                if verbose and not quiet:
+                                    print("  alfa error: {}".format(e))
+
+                        if (not results['violations']
+                                and not results['incomplete']
+                                and not results['passes']):
+                            _vskip(url, "no engine results")
                             return None
 
                         # Log non-200 status (page is still scanned)
@@ -1126,13 +1285,13 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             'http_status': (
                                 status if status != 0 else None),
                             'violations':
-                                results.get('violations', []),
+                                results['violations'],
                             'incomplete':
-                                results.get('incomplete', []),
+                                results['incomplete'],
                             'passes':
-                                results.get('passes', []),
+                                results['passes'],
                             'inapplicable':
-                                results.get('inapplicable', []),
+                                results['inapplicable'],
                         }, new_links, worker_id, elapsed)
                     except Exception:
                         return None
@@ -1463,6 +1622,21 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                         await task
                     except (asyncio.CancelledError, Exception):
                         pass
+
+                # Shut down Alfa subprocess
+                if _alfa_proc and _alfa_proc.returncode is None:
+                    try:
+                        _alfa_proc.stdin.write(
+                            json.dumps({'quit': True}).encode()
+                            + b'\n')
+                        await _alfa_proc.stdin.drain()
+                        await asyncio.wait_for(
+                            _alfa_proc.wait(), timeout=10)
+                    except Exception:
+                        try:
+                            _alfa_proc.kill()
+                        except Exception:
+                            pass
 
                 try:
                     await browser.close()
@@ -2234,6 +2408,12 @@ def main():
                         help='Page load strategy (default: networkidle). '
                              'networkidle waits for no network activity for 500ms. '
                              'load uses the traditional load event + page_wait delay.')
+    parser.add_argument('--engine', default=None,
+                        choices=['axe', 'alfa', 'both'],
+                        help='Accessibility engine (default: axe). '
+                             'axe: axe-core in-browser injection. '
+                             'alfa: Siteimprove Alfa via shared CDP. '
+                             'both: run both engines on each page.')
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')
@@ -2514,6 +2694,8 @@ OTHER NOTES
         config['workers'] = args.workers
     if args.wait_until:
         config['wait_until'] = args.wait_until
+    if args.engine:
+        config['engine'] = args.engine
     basename = args.output or 'axe-spyder-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
     output_dir = args.output_dir or config.get('output_dir', os.getcwd())
     os.makedirs(output_dir, exist_ok=True)
