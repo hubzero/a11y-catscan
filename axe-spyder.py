@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-axe-spider - WCAG accessibility scanner using axe-core, Selenium, and Chromium.
+axe-spyder - WCAG accessibility scanner using axe-core, Selenium, and Chromium.
 
 Crawls a website and runs axe-core accessibility checks on each page,
 producing HTML and JSON reports.
 
 Usage:
-    axe-spider.py [OPTIONS] START_URL
+    axe-spyder.py [OPTIONS] START_URL
 
 Examples:
     # Full crawl scan
-    axe-spider.py https://example.com/
-    axe-spider.py --max-pages 500 --llm https://example.com/
+    axe-spyder.py https://example.com/
+    axe-spyder.py --max-pages 500 --llm https://example.com/
 
     # Quick single-page check after a fix
-    axe-spider.py --page -q --summary-json https://example.com/fixed-page
+    axe-spyder.py --page -q --summary-json https://example.com/fixed-page
 
     # Re-scan only pages that failed previously
-    axe-spider.py --rescan previous.jsonl --diff previous.jsonl --llm
+    axe-spyder.py --rescan previous.jsonl --diff previous.jsonl --llm
 
     # Check just contrast issues
-    axe-spider.py --page --rule color-contrast https://example.com/page
+    axe-spyder.py --page --rule color-contrast https://example.com/page
 
     # Scan a specific list of URLs
-    axe-spider.py --urls pages.txt --llm
+    axe-spyder.py --urls pages.txt --llm
 
 Exit codes: 0 = no violations, 1 = violations found.
 """
@@ -72,7 +72,7 @@ except ImportError:
 # and run from anywhere without installation.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AXE_JS_PATH = os.path.join(SCRIPT_DIR, 'axe.min.js')
-DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, 'axe-spider.yaml')
+DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, 'axe-spyder.yaml')
 
 # File extensions that are never HTML pages.  Using a frozenset gives O(1)
 # lookup instead of scanning a list on every URL the crawler discovers.
@@ -417,11 +417,11 @@ class SeleniumBrowser:
         chromedriver = config.get('chromedriver_path', '/usr/bin/chromedriver')
         if not os.path.isfile(chromium):
             print("ERROR: Chromium not found at: {}".format(chromium), file=sys.stderr)
-            print("  Install it or set chromium_path in axe-spider.yaml", file=sys.stderr)
+            print("  Install it or set chromium_path in axe-spyder.yaml", file=sys.stderr)
             sys.exit(2)
         if not os.path.isfile(chromedriver):
             print("ERROR: ChromeDriver not found at: {}".format(chromedriver), file=sys.stderr)
-            print("  Install it or set chromedriver_path in axe-spider.yaml", file=sys.stderr)
+            print("  Install it or set chromedriver_path in axe-spyder.yaml", file=sys.stderr)
             sys.exit(2)
 
         opts = Options()
@@ -786,10 +786,10 @@ def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None,
     # often include them (e.g. "Disallow: /tools/" blocks /tools/ but
     # technically not /tools without the slash).
     if robots_parser is not None:
-        if not robots_parser.can_fetch('axe-spider', url):
+        if not robots_parser.can_fetch('axe-spyder', url):
             return False
         url_with_slash = url.rstrip('/') + '/'
-        if not robots_parser.can_fetch('axe-spider', url_with_slash):
+        if not robots_parser.can_fetch('axe-spyder', url_with_slash):
             return False
 
     return True
@@ -828,7 +828,7 @@ def http_status(url, timeout=10):
         ct = r.headers.get('Content-Type', '')
         return ct.split(';')[0].strip().lower()
 
-    headers = {'User-Agent': 'axe-spider/1.0'}
+    headers = {'User-Agent': 'axe-spyder/1.0'}
     if _http_cookie_header:
         headers['Cookie'] = _http_cookie_header
 
@@ -1091,7 +1091,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     # is applied per-worker after each page load to let JavaScript settle.
     crawl_delay = 0
     if robots_parser is not None:
-        delay = robots_parser.crawl_delay('axe-spider')
+        delay = robots_parser.crawl_delay('axe-spyder')
         if delay is not None:
             crawl_delay = int(delay)
     rate_limiter = RateLimiter(crawl_delay)
@@ -2506,7 +2506,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
 
     # Build markdown
     lines = []
-    lines.append('# axe-spider accessibility scan results\n')
+    lines.append('# axe-spyder accessibility scan results\n')
     lines.append('Site: {}  '.format(start_url))
     lines.append('Level: {}  '.format(level_label))
     lines.append('axe-core: {}  '.format(axe_ver))
@@ -2587,7 +2587,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
     lines.append('- JSON (full axe-core output): {}'.format(json_sibling))
     lines.append('- JSONL (streaming, for --diff/--rescan): {}'.format(jsonl_sibling))
     lines.append('- HTML (human-readable report): {}'.format(html_sibling))
-    lines.append('- Run `axe-spider.py --help-audit` for the full audit workflow guide')
+    lines.append('- Run `axe-spyder.py --help-audit` for the full audit workflow guide')
     lines.append('')
 
     report = '\n'.join(lines)
@@ -2651,7 +2651,7 @@ def main():
     parser.add_argument('url', nargs='?', default=None,
                         help='Starting URL to scan')
     parser.add_argument('--config', default=None,
-                        help='Path to YAML config file (default: axe-spider.yaml alongside script)')
+                        help='Path to YAML config file (default: axe-spyder.yaml alongside script)')
     parser.add_argument('--level', default=None,
                         choices=sorted(WCAG_LEVELS.keys()),
                         help='WCAG conformance level (default: wcag21aa)')
@@ -2669,7 +2669,7 @@ def main():
                         help='Ignore robots.txt (by default, disallowed paths are skipped)')
     parser.add_argument('--name', '--output', default=None, dest='output',
                         help='Job name used as the basename for all output files '
-                             '(default: axe-spider-YYYY-MM-DD-HHMMSS)')
+                             '(default: axe-spyder-YYYY-MM-DD-HHMMSS)')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: from config or current directory)')
     parser.add_argument('--allowlist', default=None,
@@ -2744,13 +2744,13 @@ def main():
 WCAG Accessibility Audit Guide
 ===============================
 
-You are a WCAG accessibility auditor. Use axe-spider to scan websites for
+You are a WCAG accessibility auditor. Use axe-spyder to scan websites for
 WCAG 2.1 AA compliance violations and then fix them in the source code.
 
 AUDIT WORKFLOW
 --------------
 1. SCAN: Run a full crawl to establish a baseline.
-     axe-spider.py --max-pages 500 --llm https://example.com/
+     axe-spyder.py --max-pages 500 --llm https://example.com/
    Read the .md (LLM report) for a concise summary of issues.
 
 2. PRIORITIZE: Fix violations first (WCAG failures), then incompletes.
@@ -2766,11 +2766,11 @@ AUDIT WORKFLOW
    - focus visible: add :focus outline styles
 
 4. VERIFY: After each fix, re-check the specific page:
-     axe-spider.py --page -q --summary-json https://example.com/fixed-page
+     axe-spyder.py --page -q --summary-json https://example.com/fixed-page
    Check exit code: 0 = clean, 1 = still has violations.
 
 5. REGRESSION CHECK: Re-scan previous failures to confirm fixes:
-     axe-spider.py --rescan baseline.jsonl --diff baseline.jsonl --llm
+     axe-spyder.py --rescan baseline.jsonl --diff baseline.jsonl --llm
    The diff shows what was fixed vs what's new vs what remains.
 
 6. SUPPRESS KNOWN ISSUES: For axe-core limitations that aren't real
@@ -2818,7 +2818,7 @@ OTHER NOTES
   and on SIGTERM/SIGINT, so partial results survive if the scan is killed.
 - The scanner runs at low CPU priority (nice 10) and high OOM score
   (1000) by default so it won't starve production services on shared
-  servers.  Both are configurable in axe-spider.yaml.
+  servers.  Both are configurable in axe-spyder.yaml.
 """)
         sys.exit(0)
 
@@ -2929,7 +2929,7 @@ OTHER NOTES
         config['driver'] = args.driver
     if args.workers:
         config['workers'] = args.workers
-    basename = args.output or 'axe-spider-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
+    basename = args.output or 'axe-spyder-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
     output_dir = args.output_dir or config.get('output_dir', os.getcwd())
     os.makedirs(output_dir, exist_ok=True)
 
