@@ -108,6 +108,22 @@ async def login(context, config):
         await page.close()
 
 
+async def init_from_context(context):
+    """Initialize session cookie tracking from an existing context.
+
+    Called when restoring from saved storage_state instead of running
+    login(). Captures the current session cookie so is_logged_in()
+    can detect changes.
+    """
+    global _session_cookie_name, _session_cookie_value
+    cookies = await context.cookies()
+    for c in cookies:
+        if c.get('httpOnly') and c['name'] != '__cfduid':
+            _session_cookie_name = c['name']
+            _session_cookie_value = c['value']
+            break
+
+
 async def is_logged_in(page):
     """Check if the session is still active after a page load.
 

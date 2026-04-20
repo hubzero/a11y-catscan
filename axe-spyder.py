@@ -879,6 +879,76 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                 _recovery_mode = asyncio.Event()
                 _recovery_done = asyncio.Event()
                 _suspect_urls = []
+                _storage_state_path = os.path.join(
+                    SCRIPT_DIR, '.auth-state.json')
+
+                async def _do_login(browser, reason=''):
+                    """Run login script and save storage state.
+                    Returns (context, success)."""
+                    ctx = await browser.new_context(
+                        viewport={'width': 1280, 'height': 1024},
+                        ignore_https_errors=ignore_certs)
+                    try:
+                        ok = await _login_plugin.login(ctx, config)
+                    except Exception as e:
+                        if not quiet:
+                            print("  Login error{}: {}".format(
+                                ' (' + reason + ')' if reason else '',
+                                e))
+                        return ctx, False
+                    if ok:
+                        try:
+                            await ctx.storage_state(
+                                path=_storage_state_path)
+                        except Exception:
+                            pass
+                    return ctx, ok
+
+                async def _try_saved_state(browser):
+                    """Try loading saved auth state. Returns
+                    (context, success) or (None, False).
+                    Verifies the session by loading a page and
+                    checking we weren't redirected to login."""
+                    if not os.path.isfile(_storage_state_path):
+                        return None, False
+                    try:
+                        ctx = await browser.new_context(
+                            viewport={'width': 1280, 'height': 1024},
+                            ignore_https_errors=ignore_certs,
+                            storage_state=_storage_state_path)
+                        # Verify: load start URL, check we're
+                        # actually logged in (not just public access)
+                        test_page = await ctx.new_page()
+                        await test_page.goto(
+                            start_url, wait_until='networkidle',
+                            timeout=30000)
+                        final_url = test_page.url
+                        # Check for login redirect
+                        if '/login' in final_url:
+                            await test_page.close()
+                            await ctx.close()
+                            return None, False
+                        # Check for logged-in indicator in DOM
+                        logged_in = await test_page.evaluate(
+                            "!!document.querySelector("
+                            "'.loggedin, #account, "
+                            "[data-loggedin]')")
+                        await test_page.close()
+                        if not logged_in:
+                            await ctx.close()
+                            return None, False
+                        # Session is live — initialize the
+                        # login plugin's cookie tracking so
+                        # is_logged_in() works for the rest
+                        # of the scan.
+                        if hasattr(_login_plugin,
+                                   'init_from_context'):
+                            await _login_plugin.init_from_context(
+                                ctx)
+                        return ctx, True
+                    except Exception:
+                        return None, False
+
                 if login_script:
                     script_path = os.path.expanduser(login_script)
                     if not os.path.isabs(script_path):
@@ -890,20 +960,22 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                         _login_plugin = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(_login_plugin)
 
-                        context = await browser.new_context(
-                            viewport={'width': 1280, 'height': 1024},
-                            ignore_https_errors=ignore_certs)
-                        try:
-                            success = await _login_plugin.login(
-                                context, config)
-                        except Exception as e:
+                        # Try saved auth state first (fast)
+                        context, success = await _try_saved_state(
+                            browser)
+                        if success:
                             if not quiet:
-                                print("  Login error: {}".format(e))
-                            success = False
+                                print("  Authenticated from saved state")
+                        else:
+                            # Fall back to login script
+                            context, success = await _do_login(
+                                browser)
+
                         if not success:
                             if not quiet:
                                 print("  Login failed — scanning as anonymous")
-                            await context.close()
+                            if context:
+                                await context.close()
                             context = None
                     else:
                         if not quiet:
@@ -1230,11 +1302,13 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             print("  [recovery: {} suspect URLs, re-logging in]".format(
                                 len(_suspect_urls)))
 
-                        # Re-login
+                        # Re-login and save fresh state
                         try:
-                            await _login_plugin.login(context, config)
+                            await context.close()
                         except Exception:
                             pass
+                        context, _ = await _do_login(
+                            browser, 'recovery')
 
                         # Test each suspect URL serially
                         safe_urls = []
@@ -1353,34 +1427,18 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                         active_wids.clear()
 
                         # Re-authenticate after browser restart
+                        # Try saved state first (instant), fall
+                        # back to login script if expired.
                         if _login_plugin:
-                            context = await browser.new_context(
-                                viewport={'width': 1280,
-                                          'height': 1024},
-                                ignore_https_errors=ignore_certs)
-                            try:
-                                success = await _login_plugin.login(
-                                    context, config)
-                                if success:
-                                    # Update cookie header for
-                                    # HTTP pre-checks
-                                    cookies = (
-                                        await context.cookies())
-                                    if cookies:
-                                        global _http_cookie_header
-                                        _http_cookie_header = (
-                                            '; '.join(
-                                                '{}={}'.format(
-                                                    c['name'],
-                                                    c['value'])
-                                                for c in cookies))
-                                elif not quiet:
-                                    print("  [re-login failed"
-                                          " after restart]")
-                            except Exception as e:
-                                if not quiet:
-                                    print("  [re-login error: {}]"
-                                          .format(e))
+                            context, success = (
+                                await _try_saved_state(browser))
+                            if not success:
+                                context, success = (
+                                    await _do_login(
+                                        browser, 'restart'))
+                            if not success and not quiet:
+                                print("  [re-login failed"
+                                      " after restart]")
 
                         # Refill the sliding window after restart
                         for i in range(num_workers):
