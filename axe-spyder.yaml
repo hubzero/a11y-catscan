@@ -1,0 +1,46 @@
+# axe-spyder site configuration — cdmHUB
+#
+# Site-specific settings. Command-line arguments override these.
+
+url: https://cdmhub.org/
+level: wcag21aa
+max_pages: 50
+output_dir: /var/www/cdmhub/reports
+
+# Seconds to wait after page load for JS to settle (MathJax, AssistiveMML)
+page_wait: 3
+
+# We manage our own robots.txt — ignore it for internal scanning.
+# cdmHUB's robots.txt blocks crawlers from paths we need to scan.
+ignore_robots: true
+
+# Paths to exclude from scanning
+exclude_paths:
+  - /login
+  - /api
+
+# Query parameters to strip from URLs during normalization.
+# This deduplicates sort/filter/pagination variants of the same page.
+strip_query_params:
+  - limit
+  - limitstart
+  - start
+  - sort
+  - sortby
+  - sortdir
+  - return
+  - filterby
+  - sharewith
+  - path: ^/tags
+    querystring: [parent, area]
+
+# Authentication — login before scanning to reach member-only pages.
+# login_script is a Python file with: async def login(context, config) -> bool
+auth:
+  login_script: login-hubzero.py
+  credentials_file: ~/.axescan-creds
+  login_url: /login
+
+# Chromium / ChromeDriver paths
+chromium_path: /usr/bin/chromium-browser
+chromedriver_path: /usr/bin/chromedriver
