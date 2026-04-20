@@ -1,6 +1,6 @@
-# axe-spider site configuration
+# axe-spyder site configuration
 #
-# Copy to axe-spider.yaml and edit for your site.
+# Copy to axe-spyder.yaml and edit for your site.
 # Command-line arguments override config values.
 
 # Default starting URL
@@ -80,7 +80,7 @@ oom_score_adj: 1000
 # See login-hubzero.py for an example.
 # auth:
 #   login_script: login-hubzero.py             # login plugin (site-specific)
-#   credentials_file: ~/.axe-spider-creds      # username:password or two lines
+#   credentials_file: ~/.axe-spyder-creds      # username:password or two lines
 #   login_url: /login                           # passed to plugin via config
 
 # Ignore robots.txt restrictions (default: obey robots.txt)
