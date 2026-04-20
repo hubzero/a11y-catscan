@@ -3,3 +3,4 @@ __pycache__/
 reports/
 axe-spider.yaml
 allowlist.yaml
+.auth-state.json
