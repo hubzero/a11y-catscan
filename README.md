@@ -16,12 +16,11 @@ page, all sharing a single browser instance.
 Run one engine or combine them:
 
 ```bash
-a11y-catscan.py --engine axe          # axe-core only (default)
-a11y-catscan.py --engine alfa         # Siteimprove Alfa only
-a11y-catscan.py --engine ibm          # IBM Equal Access only
-a11y-catscan.py --engine htmlcs       # HTML_CodeSniffer only
-a11y-catscan.py --engine both         # axe + Alfa
-a11y-catscan.py --engine all          # all four engines
+a11y-catscan.py --engine axe              # axe-core only (default)
+a11y-catscan.py --engine alfa             # Siteimprove Alfa only
+a11y-catscan.py --engine axe alfa         # axe + Alfa
+a11y-catscan.py --engine axe ibm htmlcs   # three engines
+a11y-catscan.py --engine all              # all four engines
 ```
 
 All engines share one Chromium process. Each finding is tagged with its
@@ -42,14 +41,14 @@ engine for attribution in reports.
 # Scan with defaults
 a11y-catscan.py https://example.com/
 
-# Scan 500 pages with all engines and LLM-friendly output
-a11y-catscan.py --engine all --max-pages 500 --llm https://example.com/
+# Scan 500 pages with multiple engines and LLM-friendly output
+a11y-catscan.py --engine axe alfa --max-pages 500 --llm https://example.com/
 
 # Quick single-page check
 a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
 
 # Parallel scanning with authentication
-a11y-catscan.py --engine both --workers 7 --max-pages 1000 https://example.com/
+a11y-catscan.py --engine axe alfa --workers 7 --max-pages 1000 https://example.com/
 ```
 
 ## Setup
@@ -74,7 +73,7 @@ All settings in `a11y-catscan.yaml` can be overridden on the command line.
 |---|---|---|---|
 | `url` | positional arg | — | Starting URL to crawl |
 | `level` | `--level` | `wcag21aa` | WCAG conformance level |
-| `engine` | `--engine` | `axe` | Engine: `axe`, `alfa`, `ibm`, `htmlcs`, `both`, `all` |
+| `engine` | `--engine` | `axe` | One or more engines: `axe`, `alfa`, `ibm`, `htmlcs`, `all` |
 | `max_pages` | `--max-pages` | 50 | Maximum pages to scan |
 | `page_wait` | — | 1 | Seconds to wait after page load (with `--wait-until load`) |
 | `wait_until` | `--wait-until` | `networkidle` | Page load strategy: `networkidle`, `load`, `domcontentloaded` |
