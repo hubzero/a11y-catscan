@@ -16,11 +16,11 @@ page, all sharing a single browser instance.
 Run one engine or combine them:
 
 ```bash
-a11y-catscan.py                                     # axe-core only (default)
-a11y-catscan.py --engine alfa                       # Siteimprove Alfa only
-a11y-catscan.py --engine axe --engine alfa          # axe + Alfa
-a11y-catscan.py --engine axe --engine ibm           # axe + IBM
-a11y-catscan.py --engine all                        # all four engines
+a11y-catscan.py                          # axe-core only (default)
+a11y-catscan.py --engine alfa            # Siteimprove Alfa only
+a11y-catscan.py --engine axe,alfa        # axe + Alfa
+a11y-catscan.py --engine axe,ibm,htmlcs  # three engines
+a11y-catscan.py --engine all             # all four engines
 ```
 
 All engines share one Chromium process. Each finding is tagged with its
@@ -42,13 +42,13 @@ engine for attribution in reports.
 a11y-catscan.py https://example.com/
 
 # Scan 500 pages with multiple engines and LLM-friendly output
-a11y-catscan.py --engine axe --engine alfa --max-pages 500 --llm https://example.com/
+a11y-catscan.py --engine axe,alfa --max-pages 500 --llm https://example.com/
 
 # Quick single-page check
 a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
 
 # Parallel scanning with authentication
-a11y-catscan.py --engine axe --engine alfa --workers 7 --max-pages 1000 https://example.com/
+a11y-catscan.py --engine axe,alfa --workers 7 --max-pages 1000 https://example.com/
 ```
 
 ## Setup

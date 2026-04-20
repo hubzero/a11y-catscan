@@ -2601,11 +2601,11 @@ def main():
                         help='Page load strategy (default: networkidle). '
                              'networkidle waits for no network activity for 500ms. '
                              'load uses the traditional load event + page_wait delay.')
-    parser.add_argument('--engine', action='append', default=None,
-                        metavar='ENGINE',
-                        help='Accessibility engine to run (repeatable, default: axe). '
+    parser.add_argument('--engine', default=None,
+                        metavar='ENGINE[,ENGINE,...]',
+                        help='Accessibility engines, comma-separated (default: axe). '
                              'Engines: axe, alfa, ibm, htmlcs, all. '
-                             'Example: --engine axe --engine alfa')
+                             'Example: --engine axe,alfa')
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')
@@ -2888,7 +2888,8 @@ OTHER NOTES
         config['wait_until'] = args.wait_until
     if args.engine:
         engines = []
-        for e in args.engine:
+        for e in args.engine.split(','):
+            e = e.strip()
             if e == 'all':
                 engines = ['axe', 'alfa', 'ibm', 'htmlcs']
                 break
