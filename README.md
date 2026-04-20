@@ -22,11 +22,12 @@ axe-spyder.py --page -q --summary-json https://example.com/fixed-page
 
 ## Setup
 
-Requires Python 3.8+ and Playwright.
+Requires Python 3.8+, Node.js 18+, and Playwright.
 
 ```bash
 pip install playwright pyyaml
 playwright install chromium
+npm install                    # installs axe-core from package.json
 ```
 
 Copy `axe-spyder.yaml.example` to `axe-spyder.yaml` and edit for your
