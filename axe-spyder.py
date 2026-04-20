@@ -615,11 +615,12 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             pass  # not on Linux or no permission — harmless
 
     page_wait = _safe_int(config.get('page_wait', 1), 1)
+    wait_strategy = config.get('wait_until', 'networkidle')
+    if wait_strategy not in ('networkidle', 'load', 'domcontentloaded', 'commit'):
+        wait_strategy = 'networkidle'
     axe_source = load_axe_source()
     num_workers = _safe_int(config.get('workers', 1), 1)
-    # Set up auth cookie header for http_status() pre-checks.
-    # Without this, authenticated pages return 302→login to the HEAD
-    # request and get skipped before the browser ever loads them.
+    # Set up auth cookie header for any http_status() utility calls.
     global _http_cookie_header
     _auth_cookies = load_cookies(config)
     if _auth_cookies:
@@ -917,17 +918,6 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                         await _recovery_done.wait()
 
                     page_t0 = time.time()
-                    loop = asyncio.get_event_loop()
-                    status, content_type = await loop.run_in_executor(
-                        None, http_status, url)
-                    if status >= 400:
-                        _vskip(url, "HTTP {}".format(status))
-                        return None
-                    if (content_type
-                            and content_type not in _HTML_TYPES):
-                        _vskip(url, "not HTML ({})".format(
-                            content_type))
-                        return None
                     if context:
                         page = await context.new_page()
                     else:
@@ -943,9 +933,37 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             delay = rate_limiter.wait_time()
                             if delay > 0:
                                 await asyncio.sleep(delay)
-                        await page.goto(url, wait_until='load')
-                        await page.wait_for_timeout(
-                            page_wait * 1000)
+
+                        # Navigate and check the response directly —
+                        # no separate HEAD pre-check needed.
+                        # wait_until: 'networkidle' (default) waits
+                        # for no network activity for 500ms.
+                        # 'load' + page_wait uses a fixed delay.
+                        response = await page.goto(
+                            url, wait_until=wait_strategy,
+                            timeout=60000)
+                        if page_wait and wait_strategy != 'networkidle':
+                            await page.wait_for_timeout(
+                                page_wait * 1000)
+
+                        if response is None:
+                            _vskip(url, "no response")
+                            return None
+
+                        status = response.status
+                        content_type = (
+                            response.headers.get(
+                                'content-type', '')
+                            .split(';')[0].strip().lower())
+
+                        if status >= 400:
+                            _vskip(url, "HTTP {}".format(status))
+                            return None
+                        if (content_type
+                                and content_type not in _HTML_TYPES):
+                            _vskip(url, "not HTML ({})".format(
+                                content_type))
+                            return None
 
                         # Check if session is still active.
                         # If lost, add this URL to suspects and
@@ -2022,6 +2040,11 @@ def main():
     parser.add_argument('--workers', type=int, default=None,
                         help='Number of parallel browser instances (default: 1). '
                              'Each uses ~200-500MB RAM. Rate limits are shared.')
+    parser.add_argument('--wait-until', default=None,
+                        choices=['networkidle', 'load', 'domcontentloaded', 'commit'],
+                        help='Page load strategy (default: networkidle). '
+                             'networkidle waits for no network activity for 500ms. '
+                             'load uses the traditional load event + page_wait delay.')
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')
@@ -2269,6 +2292,8 @@ OTHER NOTES
     # Workers: number of parallel browser instances
     if args.workers:
         config['workers'] = args.workers
+    if args.wait_until:
+        config['wait_until'] = args.wait_until
     basename = args.output or 'axe-spyder-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
     output_dir = args.output_dir or config.get('output_dir', os.getcwd())
     os.makedirs(output_dir, exist_ok=True)
