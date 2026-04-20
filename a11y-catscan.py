@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-axe-spyder - WCAG accessibility scanner using axe-core, Playwright, and Chromium.
+a11y-catscan - WCAG accessibility scanner using axe-core, Playwright, and Chromium.
 
 Crawls a website and runs axe-core accessibility checks on each page,
 producing HTML and JSON reports.
 
 Usage:
-    axe-spyder.py [OPTIONS] START_URL
+    a11y-catscan.py [OPTIONS] START_URL
 
 Examples:
     # Full crawl scan
-    axe-spyder.py https://example.com/
-    axe-spyder.py --max-pages 500 --llm https://example.com/
+    a11y-catscan.py https://example.com/
+    a11y-catscan.py --max-pages 500 --llm https://example.com/
 
     # Quick single-page check after a fix
-    axe-spyder.py --page -q --summary-json https://example.com/fixed-page
+    a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
 
     # Re-scan only pages that failed previously
-    axe-spyder.py --rescan previous.jsonl --diff previous.jsonl --llm
+    a11y-catscan.py --rescan previous.jsonl --diff previous.jsonl --llm
 
     # Check just contrast issues
-    axe-spyder.py --page --rule color-contrast https://example.com/page
+    a11y-catscan.py --page --rule color-contrast https://example.com/page
 
     # Scan a specific list of URLs
-    axe-spyder.py --urls pages.txt --llm
+    a11y-catscan.py --urls pages.txt --llm
 
 Exit codes: 0 = no violations, 1 = violations found.
 """
@@ -58,7 +58,7 @@ except ImportError:
 # and run from anywhere without installation.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AXE_JS_PATH = os.path.join(SCRIPT_DIR, 'node_modules', 'axe-core', 'axe.min.js')
-DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, 'axe-spyder.yaml')
+DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, 'a11y-catscan.yaml')
 
 # File extensions that are never HTML pages.  Using a frozenset gives O(1)
 # lookup instead of scanning a list on every URL the crawler discovers.
@@ -498,10 +498,10 @@ def should_scan(url, base_url, include_paths, exclude_paths, exclude_regex=None,
     # often include them (e.g. "Disallow: /tools/" blocks /tools/ but
     # technically not /tools without the slash).
     if robots_parser is not None:
-        if not robots_parser.can_fetch('axe-spyder', url):
+        if not robots_parser.can_fetch('a11y-catscan', url):
             return False
         url_with_slash = url.rstrip('/') + '/'
-        if not robots_parser.can_fetch('axe-spyder', url_with_slash):
+        if not robots_parser.can_fetch('a11y-catscan', url_with_slash):
             return False
 
     return True
@@ -540,7 +540,7 @@ def http_status(url, timeout=10):
         ct = r.headers.get('Content-Type', '')
         return ct.split(';')[0].strip().lower()
 
-    headers = {'User-Agent': 'axe-spyder/1.0'}
+    headers = {'User-Agent': 'a11y-catscan/1.0'}
     if _http_cookie_header:
         headers['Cookie'] = _http_cookie_header
 
@@ -762,7 +762,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     # is applied per-worker after each page load to let JavaScript settle.
     crawl_delay = 0
     if robots_parser is not None:
-        delay = robots_parser.crawl_delay('axe-spyder')
+        delay = robots_parser.crawl_delay('a11y-catscan')
         if delay is not None:
             crawl_delay = int(delay)
     rate_limiter = RateLimiter(crawl_delay)
@@ -2086,7 +2086,7 @@ def generate_html_report(jsonl_path, output_path, start_url,
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Axe Accessibility Scan Report</title>
+<title>A11y CatScan Report</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -2135,7 +2135,7 @@ def generate_html_report(jsonl_path, output_path, start_url,
 <body>
 """)
 
-    html_parts.append('<h1>Axe Accessibility Scan Report</h1>')
+    html_parts.append('<h1>A11y CatScan Report</h1>')
     html_parts.append('<p class="meta">Scanned: {} | {} | Generated: {} | axe-core {}</p>'.format(
         _esc(start_url), _esc(level_label), now, axe_ver))
     html_parts.append('<p class="meta">Scope: HTML pages only. '
@@ -2418,7 +2418,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
 
     # Build markdown
     lines = []
-    lines.append('# axe-spyder accessibility scan results\n')
+    lines.append('# a11y-catscan accessibility scan results\n')
     lines.append('Site: {}  '.format(start_url))
     lines.append('Level: {}  '.format(level_label))
     lines.append('axe-core: {}  '.format(axe_ver))
@@ -2499,7 +2499,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
     lines.append('- JSON (full axe-core output): {}'.format(json_sibling))
     lines.append('- JSONL (streaming, for --diff/--rescan): {}'.format(jsonl_sibling))
     lines.append('- HTML (human-readable report): {}'.format(html_sibling))
-    lines.append('- Run `axe-spyder.py --help-audit` for the full audit workflow guide')
+    lines.append('- Run `a11y-catscan.py --help-audit` for the full audit workflow guide')
     lines.append('')
 
     report = '\n'.join(lines)
@@ -2563,7 +2563,7 @@ def main():
     parser.add_argument('url', nargs='?', default=None,
                         help='Starting URL to scan')
     parser.add_argument('--config', default=None,
-                        help='Path to YAML config file (default: axe-spyder.yaml alongside script)')
+                        help='Path to YAML config file (default: a11y-catscan.yaml alongside script)')
     parser.add_argument('--level', default=None,
                         choices=sorted(WCAG_LEVELS.keys()),
                         help='WCAG conformance level (default: wcag21aa)')
@@ -2581,7 +2581,7 @@ def main():
                         help='Ignore robots.txt (by default, disallowed paths are skipped)')
     parser.add_argument('--name', '--output', default=None, dest='output',
                         help='Job name used as the basename for all output files '
-                             '(default: axe-spyder-YYYY-MM-DD-HHMMSS)')
+                             '(default: a11y-catscan-YYYY-MM-DD-HHMMSS)')
     parser.add_argument('--output-dir', default=None,
                         help='Output directory (default: from config or current directory)')
     parser.add_argument('--allowlist', default=None,
@@ -2678,13 +2678,13 @@ def main():
 WCAG Accessibility Audit Guide
 ===============================
 
-You are a WCAG accessibility auditor. Use axe-spyder to scan websites for
+You are a WCAG accessibility auditor. Use a11y-catscan to scan websites for
 WCAG 2.1 AA compliance violations and then fix them in the source code.
 
 AUDIT WORKFLOW
 --------------
 1. SCAN: Run a full crawl to establish a baseline.
-     axe-spyder.py --max-pages 500 --llm https://example.com/
+     a11y-catscan.py --max-pages 500 --llm https://example.com/
    Read the .md (LLM report) for a concise summary of issues.
 
 2. PRIORITIZE: Fix violations first (WCAG failures), then incompletes.
@@ -2700,11 +2700,11 @@ AUDIT WORKFLOW
    - focus visible: add :focus outline styles
 
 4. VERIFY: After each fix, re-check the specific page:
-     axe-spyder.py --page -q --summary-json https://example.com/fixed-page
+     a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
    Check exit code: 0 = clean, 1 = still has violations.
 
 5. REGRESSION CHECK: Re-scan previous failures to confirm fixes:
-     axe-spyder.py --rescan baseline.jsonl --diff baseline.jsonl --llm
+     a11y-catscan.py --rescan baseline.jsonl --diff baseline.jsonl --llm
    The diff shows what was fixed vs what's new vs what remains.
 
 6. SUPPRESS KNOWN ISSUES: For axe-core limitations that aren't real
@@ -2752,7 +2752,7 @@ OTHER NOTES
   and on SIGTERM/SIGINT, so partial results survive if the scan is killed.
 - The scanner runs at low CPU priority (nice 10) and high OOM score
   (1000) by default so it won't starve production services on shared
-  servers.  Both are configurable in axe-spyder.yaml.
+  servers.  Both are configurable in a11y-catscan.yaml.
 """)
         sys.exit(0)
 
@@ -2884,7 +2884,7 @@ OTHER NOTES
         config['wait_until'] = args.wait_until
     if args.engine:
         config['engine'] = args.engine
-    basename = args.output or 'axe-spyder-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
+    basename = args.output or 'a11y-catscan-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
     output_dir = args.output_dir or config.get('output_dir', os.getcwd())
     os.makedirs(output_dir, exist_ok=True)
 

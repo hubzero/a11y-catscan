@@ -1,8 +1,8 @@
 {
-  "name": "axe-spyder",
+  "name": "a11y-catscan",
   "version": "1.0.0",
   "private": true,
-  "description": "WCAG accessibility scanner — axe-core and Siteimprove Alfa engines",
+  "description": "WCAG accessibility scanner — four engines: axe-core, Siteimprove Alfa, IBM Equal Access, HTML_CodeSniffer",
   "dependencies": {
     "@siteimprove/alfa-act": "^0.114.3",
     "@siteimprove/alfa-aria": "^0.114.3",

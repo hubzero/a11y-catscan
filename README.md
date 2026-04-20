@@ -1,4 +1,4 @@
-# axe-spyder
+# a11y-catscan
 
 WCAG accessibility scanner that crawls a website using Playwright/Chromium
 and runs [axe-core](https://github.com/dequelabs/axe-core) checks on
@@ -8,16 +8,16 @@ each page.  Produces HTML, JSON, and LLM-optimized markdown reports.
 
 ```bash
 # Scan with defaults from config
-axe-spyder.py
+a11y-catscan.py
 
 # Scan a specific URL
-axe-spyder.py https://example.com/
+a11y-catscan.py https://example.com/
 
 # Scan 500 pages with LLM-friendly output
-axe-spyder.py --max-pages 500 --llm https://example.com/
+a11y-catscan.py --max-pages 500 --llm https://example.com/
 
 # Quick single-page check after a fix
-axe-spyder.py --page -q --summary-json https://example.com/fixed-page
+a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
 ```
 
 ## Setup
@@ -30,13 +30,13 @@ playwright install chromium
 npm install                    # installs axe-core from package.json
 ```
 
-Copy `axe-spyder.yaml.example` to `axe-spyder.yaml` and edit for your
+Copy `a11y-catscan.yaml.example` to `a11y-catscan.yaml` and edit for your
 site.  The config file is gitignored so each deployment keeps its own
 settings without merge conflicts.
 
 ## Configuration
 
-All settings in `axe-spyder.yaml` can be overridden on the command line.
+All settings in `a11y-catscan.yaml` can be overridden on the command line.
 
 | Setting | CLI flag | Default | Description |
 |---|---|---|---|
@@ -71,7 +71,7 @@ auth:
 
 The login script receives a Playwright browser context and authenticates
 via the browser UI. Cookies persist for the scan session. If the session
-expires mid-scan, axe-spyder detects it and re-authenticates automatically.
+expires mid-scan, a11y-catscan detects it and re-authenticates automatically.
 
 ## Output files
 
@@ -151,20 +151,20 @@ With `-q`, only the final summary is shown.
 
 ```bash
 # 1. Full baseline scan
-axe-spyder.py --max-pages 500 --llm https://example.com/
+a11y-catscan.py --max-pages 500 --llm https://example.com/
 
 # 2. Read the .md report, fix issues in source code
 
 # 3. Verify the fix on the specific page
-axe-spyder.py --page -q --summary-json https://example.com/fixed-page
+a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
 # Exit code 0 = clean, 1 = still has violations
 
 # 4. Re-scan only pages that failed before, compare against baseline
-axe-spyder.py --rescan baseline.jsonl --diff baseline.jsonl --llm
+a11y-catscan.py --rescan baseline.jsonl --diff baseline.jsonl --llm
 
 # 5. Large site? Scan in chunks and resume
-axe-spyder.py --max-pages 10000 https://example.com/
-axe-spyder.py --max-pages 10000 --resume reports/scan.state.json https://example.com/
+a11y-catscan.py --max-pages 10000 https://example.com/
+a11y-catscan.py --max-pages 10000 --resume reports/scan.state.json https://example.com/
 
 # 6. Suppress known axe-core limitations in an allowlist
 echo '- rule: color-contrast
