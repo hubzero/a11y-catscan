@@ -303,7 +303,7 @@ def load_axe_source():
 
 
 # Track all browser processes we launch so we can kill them on exit.
-# This prevents orphaned chromium/chromedriver processes when the script
+# This prevents orphaned chromium processes when the script
 # crashes, is killed, or exits abnormally.
 _browser_pids = set()
 
@@ -322,7 +322,7 @@ def _cleanup_browsers():
             pass
     _browser_pids.clear()
 
-    # Also kill any chromedriver/chromium processes that are children of
+    # Also kill any chromium processes that are children of
     # this process (catches anything missed by PID tracking).
     my_pid = os.getpid()
     try:
@@ -2049,7 +2049,7 @@ def main():
     parser.add_argument('--help-audit', action='store_true',
                         help='Print a guide for using this tool to perform a WCAG audit')
     parser.add_argument('--cleanup', action='store_true',
-                        help='Kill orphaned chromium/chromedriver processes from previous runs and exit')
+                        help='Kill orphaned chromium processes from previous runs and exit')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Show detailed rule/node counts for pages with issues')
 
@@ -2058,7 +2058,7 @@ def main():
     config = load_config(args.config)
 
     if args.cleanup:
-        # Kill any orphaned chromium/chromedriver processes owned by this user
+        # Kill any orphaned chromium processes owned by this user
         killed = 0
         try:
             result = subprocess.run(

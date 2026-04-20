@@ -1,6 +1,6 @@
 # axe-spyder
 
-WCAG accessibility scanner that crawls a website using Selenium/Chromium
+WCAG accessibility scanner that crawls a website using Playwright/Chromium
 and runs [axe-core](https://github.com/dequelabs/axe-core) checks on
 each page.  Produces HTML, JSON, and LLM-optimized markdown reports.
 
@@ -22,10 +22,11 @@ axe-spyder.py --page -q --summary-json https://example.com/fixed-page
 
 ## Setup
 
-Requires Python 3.6+, Selenium, and Chromium/Chrome + ChromeDriver.
+Requires Python 3.8+ and Playwright.
 
 ```bash
-pip install selenium
+pip install playwright pyyaml
+playwright install chromium
 ```
 
 Copy `axe-spyder.yaml.example` to `axe-spyder.yaml` and edit for your
@@ -54,11 +55,22 @@ All settings in `axe-spyder.yaml` can be overridden on the command line.
 | `allowlist` | `--allowlist` | — | YAML file of known-acceptable incompletes |
 | `ignore_robots` | `--ignore-robots` | false | Ignore robots.txt restrictions |
 | `ignore_certificate_errors` | — | false | Accept self-signed TLS certs |
-| `driver` | `--driver` | `selenium` | Browser driver: `selenium` or `playwright` |
-| `workers` | `--workers` | 1 | Parallel browser instances |
+| `workers` | `--workers` | 1 | Parallel async browser pages |
 | `restart_every` | — | 500 | Restart browser every N pages (prevents memory leaks) |
-| `chromium_path` | — | `/usr/bin/chromium-browser` | Path to Chrome/Chromium |
-| `chromedriver_path` | — | `/usr/bin/chromedriver` | Path to ChromeDriver (selenium only) |
+| `chromium_path` | — | — | Path to Chromium (uses Playwright's bundled Chromium by default) |
+
+## Authentication
+
+To scan authenticated pages, configure a login script:
+
+```yaml
+auth:
+  login_script: login-hubzero.py   # async def login(context, config) -> bool
+```
+
+The login script receives a Playwright browser context and authenticates
+via the browser UI. Cookies persist for the scan session. If the session
+expires mid-scan, axe-spyder detects it and re-authenticates automatically.
 
 ## Output files
 
@@ -86,8 +98,7 @@ Each scan produces:
 ### Performance
 | Flag | Description |
 |---|---|
-| `--driver TYPE` | `selenium` (default) or `playwright` (~2x faster, manages own Chromium) |
-| `--workers N` | Parallel browser instances (default: 1). Playwright uses async pages in one process; Selenium uses separate processes (~300MB each) |
+| `--workers N` | Parallel async browser pages (default: 1). All workers share one Chromium process. |
 
 ### Filtering
 | Flag | Description |
@@ -111,7 +122,7 @@ Each scan produces:
 ### Maintenance
 | Flag | Description |
 |---|---|
-| `--cleanup` | Kill orphaned chromium/chromedriver processes from previous runs |
+| `--cleanup` | Kill orphaned Chromium processes from previous runs |
 | `--help` | Show all options |
 | `--help-audit` | Print a WCAG audit workflow guide (useful for LLM assistants) |
 
@@ -134,12 +145,6 @@ With `--workers`, worker IDs are shown:
 
 With `-v`, pages with issues also get a detailed breakdown.
 With `-q`, only the final summary is shown.
-
-The final summary shows throughput:
-
-```
-Scan complete: 500 pages in 312.4s (0.6s/page)
-```
 
 ## Workflow: scan → fix → verify
 
@@ -172,7 +177,7 @@ echo '- rule: color-contrast
 |---|---|
 | 0 | No violations found |
 | 1 | Violations found |
-| 2 | Setup error (missing selenium, chromium, chromedriver, or axe.min.js) |
+| 2 | Setup error (missing playwright, chromium, or axe.min.js) |
 
 ## License
 
