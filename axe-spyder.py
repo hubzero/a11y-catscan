@@ -618,14 +618,28 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     if wait_strategy not in ('networkidle', 'load', 'domcontentloaded', 'commit'):
         wait_strategy = 'networkidle'
     engine = config.get('engine', 'axe')
-    if engine not in ('axe', 'alfa', 'both'):
+    valid_engines = ('axe', 'alfa', 'ibm', 'both', 'all')
+    if engine not in valid_engines:
         engine = 'axe'
-    use_axe = engine in ('axe', 'both')
-    use_alfa = engine in ('alfa', 'both')
+    use_axe = engine in ('axe', 'both', 'all')
+    use_alfa = engine in ('alfa', 'both', 'all')
+    use_ibm = engine in ('ibm', 'all')
     if use_axe:
         axe_source = load_axe_source()
     else:
         axe_source = None
+    ace_source = None
+    if use_ibm:
+        ace_path = os.path.join(
+            SCRIPT_DIR, 'node_modules',
+            'accessibility-checker-engine', 'ace.js')
+        if os.path.exists(ace_path):
+            with open(ace_path, 'r') as f:
+                ace_source = f.read()
+        else:
+            print("ERROR: IBM Equal Access not found. "
+                  "Run: npm install", file=sys.stderr)
+            use_ibm = False
     num_workers = _safe_int(config.get('workers', 1), 1)
     # Set up auth cookie header for any http_status() utility calls.
     global _http_cookie_header
@@ -853,7 +867,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
             run_opts['runOnly'] = {'type': 'tag', 'values': tags}
 
         async def _pw_sliding_window():
-            nonlocal page_count, total_page_time, use_alfa
+            nonlocal page_count, total_page_time, use_alfa, use_ibm
             from playwright.async_api import async_playwright
             async with async_playwright() as pw:
                 launch_args = [
@@ -1189,6 +1203,80 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                     'error', 'unknown error')
                                 _vskip(url, "axe error: {}".format(err))
                                 return None
+
+                        # IBM Equal Access engine (browser injection)
+                        if use_ibm and ace_source:
+                            try:
+                                await page.add_script_tag(
+                                    content=ace_source)
+                                # Map level to IBM ruleset
+                                ibm_ruleset = 'WCAG_2_1'
+                                if level and '22' in level:
+                                    ibm_ruleset = 'WCAG_2_2'
+                                elif level and '20' in level:
+                                    ibm_ruleset = 'WCAG_2_0'
+                                ibm_results = await page.evaluate(
+                                    """(rs) => {
+                                        return new ace.Checker()
+                                            .check(document, [rs]);
+                                    }""", ibm_ruleset)
+                                for r in ibm_results.get(
+                                        'results', []):
+                                    cat = r.get('value', ['', ''])[0]
+                                    outcome = r.get(
+                                        'value', ['', ''])[1]
+                                    if outcome == 'FAIL':
+                                        results['violations'].append({
+                                            'id': r['ruleId'],
+                                            'engine': 'ibm',
+                                            'description':
+                                                r.get('message', ''),
+                                            'help':
+                                                r.get('message', ''),
+                                            'helpUrl': '',
+                                            'impact': 'serious'
+                                                if cat == 'VIOLATION'
+                                                else 'moderate',
+                                            'tags': [],
+                                            'nodes': [{
+                                                'target': [
+                                                    r.get('path', {})
+                                                    .get('dom', '')],
+                                                'html': r.get(
+                                                    'path', {})
+                                                    .get('dom', ''),
+                                                'any': [{
+                                                    'message':
+                                                        r.get(
+                                                            'message',
+                                                            '')}],
+                                            }],
+                                        })
+                                    elif outcome == 'POTENTIAL':
+                                        results['incomplete'].append({
+                                            'id': r['ruleId'],
+                                            'engine': 'ibm',
+                                            'help':
+                                                r.get('message', ''),
+                                            'helpUrl': '',
+                                            'impact': 'moderate',
+                                            'nodes': [{
+                                                'target': [
+                                                    r.get('path', {})
+                                                    .get('dom', '')],
+                                                'html': r.get(
+                                                    'path', {})
+                                                    .get('dom', ''),
+                                                'any': [{
+                                                    'message':
+                                                        r.get(
+                                                            'message',
+                                                            '')}],
+                                            }],
+                                        })
+                            except Exception as e:
+                                if verbose and not quiet:
+                                    print("  ibm error: {}".format(e))
 
                         # Alfa engine (via CDP subprocess)
                         if use_alfa and _alfa_proc:
@@ -2409,11 +2497,11 @@ def main():
                              'networkidle waits for no network activity for 500ms. '
                              'load uses the traditional load event + page_wait delay.')
     parser.add_argument('--engine', default=None,
-                        choices=['axe', 'alfa', 'both'],
+                        choices=['axe', 'alfa', 'ibm', 'both', 'all'],
                         help='Accessibility engine (default: axe). '
-                             'axe: axe-core in-browser injection. '
-                             'alfa: Siteimprove Alfa via shared CDP. '
-                             'both: run both engines on each page.')
+                             'axe: axe-core. alfa: Siteimprove Alfa. '
+                             'ibm: IBM Equal Access. '
+                             'both: axe + alfa. all: all three engines.')
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')

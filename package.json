@@ -9,6 +9,7 @@
     "@siteimprove/alfa-playwright": "^0.82.0",
     "@siteimprove/alfa-rules": "^0.114.3",
     "@siteimprove/alfa-wcag": "^0.114.3",
+    "accessibility-checker-engine": "^4.0.16",
     "axe-core": "^4.11.3",
     "playwright": "^1.59.1"
   }
