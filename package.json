@@ -4,6 +4,12 @@
   "private": true,
   "description": "WCAG accessibility scanner — axe-core and Siteimprove Alfa engines",
   "dependencies": {
-    "axe-core": "^4.11.3"
+    "@siteimprove/alfa-act": "^0.114.3",
+    "@siteimprove/alfa-aria": "^0.114.3",
+    "@siteimprove/alfa-playwright": "^0.82.0",
+    "@siteimprove/alfa-rules": "^0.114.3",
+    "@siteimprove/alfa-wcag": "^0.114.3",
+    "axe-core": "^4.11.3",
+    "playwright": "^1.59.1"
   }
 }
