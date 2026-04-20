@@ -617,14 +617,21 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     wait_strategy = config.get('wait_until', 'networkidle')
     if wait_strategy not in ('networkidle', 'load', 'domcontentloaded', 'commit'):
         wait_strategy = 'networkidle'
-    engine = config.get('engine', 'axe')
-    valid_engines = ('axe', 'alfa', 'ibm', 'htmlcs', 'both', 'all')
-    if engine not in valid_engines:
-        engine = 'axe'
-    use_axe = engine in ('axe', 'both', 'all')
-    use_alfa = engine in ('alfa', 'both', 'all')
-    use_ibm = engine in ('ibm', 'all')
-    use_htmlcs = engine in ('htmlcs', 'all')
+    # Engine selection — list of engines to run
+    engines = config.get('engines', None)
+    if not engines:
+        # Legacy single-engine config
+        e = config.get('engine', 'axe')
+        if e == 'all':
+            engines = ['axe', 'alfa', 'ibm', 'htmlcs']
+        elif e == 'both':
+            engines = ['axe', 'alfa']
+        else:
+            engines = [e] if e in ('axe', 'alfa', 'ibm', 'htmlcs') else ['axe']
+    use_axe = 'axe' in engines
+    use_alfa = 'alfa' in engines
+    use_ibm = 'ibm' in engines
+    use_htmlcs = 'htmlcs' in engines
     if use_axe:
         axe_source = load_axe_source()
     else:
@@ -2594,14 +2601,11 @@ def main():
                         help='Page load strategy (default: networkidle). '
                              'networkidle waits for no network activity for 500ms. '
                              'load uses the traditional load event + page_wait delay.')
-    parser.add_argument('--engine', default=None,
-                        choices=['axe', 'alfa', 'ibm', 'htmlcs',
-                                 'both', 'all'],
-                        help='Accessibility engine (default: axe). '
-                             'axe: axe-core. alfa: Siteimprove Alfa. '
-                             'ibm: IBM Equal Access. '
-                             'htmlcs: HTML_CodeSniffer. '
-                             'both: axe + alfa. all: all four engines.')
+    parser.add_argument('--engine', nargs='+', default=None,
+                        metavar='ENGINE',
+                        help='Accessibility engines to run (default: axe). '
+                             'Specify one or more: axe, alfa, ibm, htmlcs, all. '
+                             'Examples: --engine axe alfa, --engine all')
     parser.add_argument('--save-every', type=int, default=None,
                         help='Flush reports every N pages (default: 25). '
                              'Partial results survive if the scan is killed.')
@@ -2883,7 +2887,18 @@ OTHER NOTES
     if args.wait_until:
         config['wait_until'] = args.wait_until
     if args.engine:
-        config['engine'] = args.engine
+        engines = []
+        for e in args.engine:
+            if e == 'all':
+                engines = ['axe', 'alfa', 'ibm', 'htmlcs']
+                break
+            elif e in ('axe', 'alfa', 'ibm', 'htmlcs'):
+                engines.append(e)
+            else:
+                parser.error("Unknown engine: {}. "
+                    "Choose from: axe, alfa, ibm, htmlcs, all"
+                    .format(e))
+        config['engines'] = engines
     basename = args.output or 'a11y-catscan-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
     output_dir = args.output_dir or config.get('output_dir', os.getcwd())
     os.makedirs(output_dir, exist_ok=True)
