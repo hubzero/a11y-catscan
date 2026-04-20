@@ -1,5 +1,5 @@
 /**
- * alfa-engine.mjs — Siteimprove Alfa engine for axe-spyder.
+ * alfa-engine.mjs — Siteimprove Alfa engine for a11y-catscan.
  *
  * Long-running subprocess that connects to an existing Chromium browser
  * via CDP and runs Alfa rules on pages already loaded by the Python crawler.

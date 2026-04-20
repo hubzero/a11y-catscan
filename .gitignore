@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 reports/
-axe-spyder.yaml
+a11y-catscan.yaml
 allowlist.yaml
 .auth-state.json
 node_modules/

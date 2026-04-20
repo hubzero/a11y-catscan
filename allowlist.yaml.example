@@ -1,4 +1,4 @@
-# axe-spyder allowlist — known-acceptable incompletes to suppress
+# a11y-catscan allowlist — known-acceptable incompletes to suppress
 #
 # Each entry matches by rule ID. Optionally narrow by URL substring
 # and/or CSS target selector. Matching incompletes are hidden from
