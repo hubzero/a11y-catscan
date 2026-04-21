@@ -5,14 +5,20 @@ MCP server for a11y-catscan.
 Exposes the scanner as Model Context Protocol tools that Claude Code
 (or any MCP client) can call directly with structured parameters.
 
+Tools are designed for quick operations that return in seconds:
+  scan_page      — scan one URL (~3-17s depending on engines)
+  analyze_report — group findings from a previous report (instant)
+  list_engines   — show installed engines and versions (instant)
+  lookup_wcag    — look up a WCAG Success Criterion (instant)
+
+Site crawls (--max-pages, --workers) are long-running and should be
+run via the CLI, not MCP.  Use the /wcag-audit skill or Bash tool.
+
 Usage:
-    # Start as MCP server (stdio transport)
-    python3 mcp_server.py
+    python3 mcp_server.py                  # start server
+    python3 a11y-catscan.py --mcp          # same thing
 
-    # Or via the main script
-    python3 a11y-catscan.py --mcp
-
-Configure in .mcp.json or ~/.claude.json:
+Configure in .mcp.json:
     {
         "mcpServers": {
             "wcag-audit": {
@@ -26,6 +32,7 @@ Configure in .mcp.json or ~/.claude.json:
 
 import json
 import os
+import re
 import sys
 import logging
 
@@ -36,15 +43,14 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger('a11y-catscan-mcp')
 
-# Ensure we can import from the a11y-catscan directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
 from mcp.server.fastmcp import FastMCP
 
 from engine_mappings import (
-    SC_META, sc_name, sc_level,
-    EARL_FAILED, EARL_CANTTELL, EARL_PASSED, EARL_INAPPLICABLE,
+    SC_META, sc_name, sc_level, IBM_SC_MAP,
+    EARL_FAILED, EARL_CANTTELL,
     ARIA_CATEGORIES, BP_CATEGORIES)
 from engines.axe import AXE_RULES
 from engines.alfa import ALFA_RULES
@@ -55,7 +61,6 @@ mcp = FastMCP("wcag-audit")
 
 def _get_axe_version():
     """Read axe-core version from the JS file header."""
-    import re
     axe_path = os.path.join(SCRIPT_DIR, 'node_modules', 'axe-core', 'axe.min.js')
     try:
         with open(axe_path) as f:
@@ -63,6 +68,47 @@ def _get_axe_version():
             return m.group(1) if m else 'unknown'
     except Exception:
         return 'not installed'
+
+
+def _read_jsonl_findings(jsonl_path):
+    """Read findings from a JSONL file, return flat list of findings."""
+    findings = []
+    if not os.path.exists(jsonl_path):
+        return findings
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            for page_url, data in obj.items():
+                for outcome in (EARL_FAILED, EARL_CANTTELL):
+                    for item in data.get(outcome, []):
+                        selector = ''
+                        html = ''
+                        if item.get('nodes'):
+                            node = item['nodes'][0]
+                            selector = (node.get('target', [''])[0]
+                                        if node.get('target') else '')
+                            html = node.get('html', '')[:200]
+                        findings.append({
+                            'url': page_url,
+                            'outcome': outcome,
+                            'id': item.get('id', ''),
+                            'engine': item.get('engine', ''),
+                            'engines': item.get('engines', {}),
+                            'engine_count': item.get('engine_count', 1),
+                            'description': item.get('description', ''),
+                            'help': item.get('help', ''),
+                            'impact': item.get('impact', ''),
+                            'tags': item.get('tags', []),
+                            'selector': selector,
+                            'html': html,
+                        })
+    return findings
 
 
 @mcp.tool()
@@ -73,16 +119,18 @@ async def scan_page(
 ) -> str:
     """Scan a single page for WCAG accessibility issues.
 
-    Runs the specified accessibility engines against one URL and returns
-    deduped findings with cross-engine confirmation.
+    Runs up to four accessibility engines against one URL and returns
+    deduped findings with cross-engine confirmation.  Takes 3-17s
+    depending on engines selected.
 
     Args:
         url: The page URL to scan (must start with http:// or https://)
-        engines: Comma-separated engine names: axe, alfa, ibm, htmlcs, or all
-        level: WCAG conformance level (wcag21a, wcag21aa, wcag21aaa, wcag22aa, best)
+        engines: Comma-separated engines: axe, alfa, ibm, htmlcs, or all (default: all)
+        level: WCAG conformance level: wcag21aa (default), wcag21a, wcag21aaa, best
 
     Returns:
-        JSON with failed/cantTell counts, deduped findings, and engine attribution.
+        JSON with summary counts, deduped findings array with CSS selectors
+        and engine attribution, and paths to full report files.
     """
     import subprocess
     cmd = [
@@ -96,140 +144,38 @@ async def scan_page(
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=120, cwd=SCRIPT_DIR)
 
-    # The last line of stdout is the summary JSON
-    lines = result.stdout.strip().split('\n')
-    summary_line = lines[-1] if lines else '{}'
-    try:
-        summary = json.loads(summary_line)
-    except (json.JSONDecodeError, ValueError):
-        summary = {}
-
-    # Find the report files from stderr (report paths are printed there)
-    report_info = {}
-    for line in result.stderr.split('\n') + result.stdout.split('\n'):
-        if 'JSON report:' in line:
-            report_info['json_report'] = line.split(':', 1)[-1].strip()
-        elif 'HTML report:' in line:
-            report_info['html_report'] = line.split(':', 1)[-1].strip()
-
-    # Read the full JSON report for detailed findings
-    findings = []
-    json_path = report_info.get('json_report', '')
-    if json_path and os.path.exists(json_path):
+    # Parse summary JSON from the last line of output
+    output = result.stdout + result.stderr
+    summary = {}
+    for line in reversed(output.strip().split('\n')):
         try:
-            # Use deduped iterator
-            sys.path.insert(0, SCRIPT_DIR)
-            # Import inline to avoid circular deps with main script
-            exec_globals = {}
-            exec("""
-import json as _json
-from engine_mappings import EARL_FAILED, EARL_CANTTELL
+            summary = json.loads(line)
+            break
+        except (json.JSONDecodeError, ValueError):
+            continue
 
-def _iter_jsonl(p):
-    with open(p.replace('.json', '.jsonl')) as f:
-        for line in f:
-            line = line.strip()
-            if not line: continue
-            for url, data in _json.loads(line).items():
-                yield url, data
-""", exec_globals)
-
-            jsonl_path = json_path.replace('.json', '.jsonl')
-            if os.path.exists(jsonl_path):
-                for page_url, data in exec_globals['_iter_jsonl'](jsonl_path):
-                    for outcome in (EARL_FAILED, EARL_CANTTELL):
-                        for item in data.get(outcome, []):
-                            findings.append({
-                                'url': page_url,
-                                'outcome': outcome,
-                                'id': item.get('id', ''),
-                                'engine': item.get('engine', ''),
-                                'engines': item.get('engines', {}),
-                                'description': item.get('description', ''),
-                                'help': item.get('help', ''),
-                                'impact': item.get('impact', ''),
-                                'tags': item.get('tags', []),
-                                'selector': (item.get('nodes', [{}])[0]
-                                             .get('target', [''])[0]
-                                             if item.get('nodes') else ''),
-                                'html': (item.get('nodes', [{}])[0]
-                                         .get('html', '')[:200]
-                                         if item.get('nodes') else ''),
-                            })
-        except Exception as e:
-            log.warning('Failed to read findings: %s', e)
-
-    return json.dumps({
-        'summary': summary,
-        'reports': report_info,
-        'findings': findings,
-        'exit_code': result.returncode,
-    }, indent=2)
-
-
-@mcp.tool()
-async def scan_site(
-    url: str,
-    engines: str = "axe",
-    level: str = "wcag21aa",
-    max_pages: int = 50,
-    workers: int = 1,
-) -> str:
-    """Crawl and scan a website for WCAG accessibility issues.
-
-    Discovers pages by following links from the starting URL, scanning
-    each page with the specified engines.  Use for full site audits.
-
-    Args:
-        url: Starting URL to crawl from
-        engines: Comma-separated engine names: axe, alfa, ibm, htmlcs, or all
-        level: WCAG conformance level
-        max_pages: Maximum number of pages to scan (default 50)
-        workers: Parallel browser pages (default 1, try 7 for speed)
-
-    Returns:
-        JSON with page count, total findings, report file paths,
-        and per-SC summary.
-    """
-    import subprocess
-    cmd = [
-        sys.executable, os.path.join(SCRIPT_DIR, 'a11y-catscan.py'),
-        '--engine', engines,
-        '--level', level,
-        '--max-pages', str(max_pages),
-        '--workers', str(workers),
-        '-q', '--summary-json', '--llm',
-        url
-    ]
-    log.info('scan_site: %s (engines=%s, max_pages=%d, workers=%d)',
-             url, engines, max_pages, workers)
-    result = subprocess.run(
-        cmd, capture_output=True, text=True,
-        timeout=max_pages * 30,  # ~30s per page worst case
-        cwd=SCRIPT_DIR)
-
-    lines = result.stdout.strip().split('\n')
-    summary_line = lines[-1] if lines else '{}'
-    try:
-        summary = json.loads(summary_line)
-    except (json.JSONDecodeError, ValueError):
-        summary = {}
-
-    report_info = {}
-    for line in result.stderr.split('\n') + result.stdout.split('\n'):
+    # Extract report paths from output
+    reports = {}
+    for line in output.split('\n'):
         if 'JSON report:' in line:
-            report_info['json_report'] = line.split(':', 1)[-1].strip()
+            reports['json'] = line.split('JSON report:')[-1].strip()
         elif 'HTML report:' in line:
-            report_info['html_report'] = line.split(':', 1)[-1].strip()
-        elif 'LLM report:' in line or '.md' in line:
-            path = line.split(':', 1)[-1].strip() if ':' in line else ''
-            if path.endswith('.md'):
-                report_info['llm_report'] = path
+            reports['html'] = line.split('HTML report:')[-1].strip()
+
+    # Read detailed findings from the JSONL
+    findings = []
+    json_path = reports.get('json', '')
+    if json_path:
+        jsonl_path = json_path.replace('.json', '.jsonl')
+        findings = _read_jsonl_findings(jsonl_path)
 
     return json.dumps({
-        'summary': summary,
-        'reports': report_info,
-        'exit_code': result.returncode,
+        'url': url,
+        'clean': summary.get('clean', False),
+        'failed': summary.get(EARL_FAILED, 0),
+        'cantTell': summary.get(EARL_CANTTELL, 0),
+        'findings': findings,
+        'reports': reports,
     }, indent=2)
 
 
@@ -240,23 +186,21 @@ async def analyze_report(
 ) -> str:
     """Analyze a previous scan report by grouping findings.
 
+    Groups deduped findings by WCAG SC, engine, best-practice category,
+    or other criteria.  Use to prioritize remediation work.
+
     Args:
         report_path: Path to a .jsonl report file from a previous scan
-        group_by: How to group: wcag, rule, selector, color, reason, level, engine, bp
+        group_by: How to group: wcag, engine, bp, rule (default: wcag)
 
     Returns:
-        JSON with grouped findings, counts, and examples.
+        JSON with grouped findings sorted by count, including SC names
+        and example selectors.
     """
-    import subprocess
     if not os.path.exists(report_path):
         return json.dumps({'error': 'Report not found: ' + report_path})
 
-    # We need a URL to satisfy the positional arg — use a dummy
-    # and feed the JSONL via --urls wouldn't work, use the report directly
-    # Actually --group-by works on the scan output, so we need to run
-    # a scan that reads from the report. But we can just parse the JSONL.
-
-    findings_by_group = {}
+    groups = {}
     try:
         with open(report_path) as f:
             for line in f:
@@ -268,11 +212,10 @@ async def analyze_report(
                     for outcome in (EARL_FAILED, EARL_CANTTELL):
                         for item in data.get(outcome, []):
                             tags = item.get('tags', [])
+
                             if group_by == 'wcag':
                                 keys = [t for t in tags
                                         if t.startswith('wcag-')]
-                                if not keys:
-                                    keys = [item.get('id', 'unknown')]
                             elif group_by == 'engine':
                                 engines = item.get('engines', {})
                                 if engines:
@@ -281,39 +224,37 @@ async def analyze_report(
                                     keys = [item.get('engine', '?')]
                             elif group_by == 'bp':
                                 keys = [t for t in tags
-                                        if t.startswith('bp-')]
+                                        if t.startswith(('bp-', 'aria-'))]
                                 if not keys:
                                     keys = [t for t in tags
                                             if t.startswith('wcag-')]
-                                if not keys:
-                                    keys = [item.get('id', '?')]
                             else:
+                                keys = [item.get('id', '?')]
+
+                            if not keys:
                                 keys = [item.get('id', 'unknown')]
 
                             for node in item.get('nodes', []):
+                                sel = (node.get('target', [''])[0]
+                                       if node.get('target') else '')
                                 for key in keys:
-                                    if key not in findings_by_group:
-                                        findings_by_group[key] = {
+                                    if key not in groups:
+                                        groups[key] = {
                                             'count': 0,
                                             'pages': set(),
                                             'example_url': url,
-                                            'example_selector': (
-                                                node.get('target', [''])[0]
-                                                if node.get('target')
-                                                else ''),
+                                            'example_selector': sel,
                                         }
-                                    findings_by_group[key]['count'] += 1
-                                    findings_by_group[key]['pages'].add(url)
+                                    groups[key]['count'] += 1
+                                    groups[key]['pages'].add(url)
     except Exception as e:
         return json.dumps({'error': str(e)})
 
-    # Convert sets to counts for JSON serialization
-    groups = []
-    for key, info in sorted(
-            findings_by_group.items(),
-            key=lambda x: x[1]['count'], reverse=True):
+    result = []
+    for key, info in sorted(groups.items(),
+                            key=lambda x: x[1]['count'], reverse=True):
         sc = key.replace('wcag-', '') if key.startswith('wcag-') else ''
-        groups.append({
+        result.append({
             'key': key,
             'sc_name': sc_name(sc) if sc else '',
             'count': info['count'],
@@ -324,74 +265,54 @@ async def analyze_report(
 
     return json.dumps({
         'group_by': group_by,
-        'total_findings': sum(g['count'] for g in groups),
-        'total_groups': len(groups),
-        'groups': groups,
+        'total_findings': sum(g['count'] for g in result),
+        'groups': result,
     }, indent=2)
 
 
 @mcp.tool()
 async def list_engines() -> str:
-    """List available accessibility engines and their versions.
+    """List available accessibility engines, versions, and the tag system.
 
     Returns:
-        JSON with engine names, versions, rule counts, and installation status.
+        JSON with engine details (name, version, rule count, install status)
+        and the three-tier tag taxonomy (WCAG, ARIA, best-practice).
     """
     engines = []
-
-    # axe-core
-    axe_ver = _get_axe_version()
-    engines.append({
-        'name': 'axe',
-        'full_name': 'axe-core (Deque)',
-        'version': axe_ver,
-        'rules': len(AXE_RULES),
-        'installed': axe_ver != 'not installed',
-        'type': 'browser injection',
-    })
-
-    # IBM
-    ace_path = os.path.join(SCRIPT_DIR, 'node_modules',
-                            'accessibility-checker-engine', 'ace.js')
-    engines.append({
-        'name': 'ibm',
-        'full_name': 'IBM Equal Access',
-        'version': '4.0.16',
-        'rules': 158,
-        'installed': os.path.exists(ace_path),
-        'type': 'browser injection',
-    })
-
-    # HTMLCS
-    htmlcs_path = os.path.join(SCRIPT_DIR, 'node_modules',
-                               'html_codesniffer', 'build', 'HTMLCS.js')
-    engines.append({
-        'name': 'htmlcs',
-        'full_name': 'HTML_CodeSniffer',
-        'version': '2.5.1',
-        'rules': len(HTMLCS_SNIFFS),
-        'installed': os.path.exists(htmlcs_path),
-        'type': 'browser injection',
-    })
-
-    # Alfa
-    alfa_path = os.path.join(SCRIPT_DIR, 'node_modules',
-                             '@siteimprove', 'alfa-rules')
-    engines.append({
-        'name': 'alfa',
-        'full_name': 'Siteimprove Alfa',
-        'version': '0.114.3',
-        'rules': len(ALFA_RULES),
-        'installed': os.path.isdir(alfa_path),
-        'type': 'Node.js subprocess via CDP',
-    })
+    checks = [
+        ('axe', 'axe-core (Deque)', _get_axe_version(), len(AXE_RULES),
+         'browser injection',
+         os.path.join(SCRIPT_DIR, 'node_modules', 'axe-core', 'axe.min.js')),
+        ('ibm', 'IBM Equal Access', '4.0.16', 158,
+         'browser injection',
+         os.path.join(SCRIPT_DIR, 'node_modules',
+                      'accessibility-checker-engine', 'ace.js')),
+        ('htmlcs', 'HTML_CodeSniffer', '2.5.1', len(HTMLCS_SNIFFS),
+         'browser injection',
+         os.path.join(SCRIPT_DIR, 'node_modules',
+                      'html_codesniffer', 'build', 'HTMLCS.js')),
+        ('alfa', 'Siteimprove Alfa', '0.114.3', len(ALFA_RULES),
+         'Node.js subprocess via CDP',
+         os.path.join(SCRIPT_DIR, 'node_modules',
+                      '@siteimprove', 'alfa-rules')),
+    ]
+    for name, full, ver, rules, typ, path in checks:
+        installed = os.path.exists(path)
+        engines.append({
+            'name': name,
+            'full_name': full,
+            'version': ver,
+            'rules': rules,
+            'type': typ,
+            'installed': installed,
+        })
 
     return json.dumps({
         'engines': engines,
-        'tag_system': {
-            'wcag_tags': len(SC_META),
-            'aria_categories': list(ARIA_CATEGORIES.keys()),
-            'bp_categories': list(BP_CATEGORIES.keys()),
+        'tags': {
+            'wcag': len(SC_META),
+            'aria': list(ARIA_CATEGORIES.keys()),
+            'bp': list(BP_CATEGORIES.keys()),
         },
     }, indent=2)
 
@@ -400,21 +321,26 @@ async def list_engines() -> str:
 async def lookup_wcag(sc: str) -> str:
     """Look up a WCAG Success Criterion by number.
 
+    Returns the official name, conformance level, WCAG version, and
+    which engines have rules that test this criterion.
+
     Args:
-        sc: Success Criterion number like '1.4.3' or 'wcag-1.4.3'
+        sc: SC number like '1.4.3' or tag like 'wcag-1.4.3'
 
     Returns:
-        JSON with SC name, level, WCAG version, and which engines test it.
+        JSON with SC details and cross-engine rule mapping.
     """
     sc = sc.replace('wcag-', '').strip()
     meta = SC_META.get(sc)
     if not meta:
-        return json.dumps({'error': 'Unknown SC: ' + sc,
-                           'hint': 'Use format like 1.4.3 or 2.4.7'})
+        return json.dumps({
+            'error': 'Unknown SC: ' + sc,
+            'hint': 'Use format like 1.4.3 or 2.4.7',
+            'available': len(SC_META),
+        })
 
     level, version, name = meta
 
-    # Which engines test this SC?
     tested_by = {}
     for rule_id, (desc, scs, is_bp) in AXE_RULES.items():
         if sc in scs:
@@ -422,7 +348,6 @@ async def lookup_wcag(sc: str) -> str:
     for rule_id, (desc, scs) in ALFA_RULES.items():
         if sc in scs:
             tested_by.setdefault('alfa', []).append(rule_id)
-    from engine_mappings import IBM_SC_MAP
     for rule_id, scs in IBM_SC_MAP.items():
         if sc in scs:
             tested_by.setdefault('ibm', []).append(rule_id)
