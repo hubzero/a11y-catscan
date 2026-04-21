@@ -1,33 +1,50 @@
 """
-Engine rule → WCAG SC mappings for a11y-catscan.
+Engine rule mappings and tag taxonomy for a11y-catscan.
 
-Each engine has its own mapping from rule IDs to WCAG Success Criteria.
-This lets us categorize findings by WCAG level (A/AA/AAA) and version
-(2.0/2.1/2.2) regardless of which engine found them.
+Three-tier tag system:
 
-Sources:
-  - IBM Equal Access: extracted from ace.js bundled rule definitions.
-    Upstream: https://github.com/IBMa/equal-access
-    Rule docs: https://www.ibm.com/able/requirements/checker-rule-sets
-    Package: accessibility-checker-engine (npm)
+    Every finding from every engine is tagged with at least one of:
 
-  - Siteimprove Alfa: each rule declares its WCAG requirements at runtime.
-    The mapping is extracted live when rules are loaded, not hardcoded.
-    Upstream: https://github.com/Siteimprove/alfa
+    wcag-X.Y.Z   (87 tags)  WCAG Success Criteria — compliance failures.
+                             One tag per SC, e.g. wcag-1.4.3 for Contrast.
+                             Source: SC_META dict below.
 
-  - axe-core: rules have WCAG tags (e.g. 'wcag143' = SC 1.4.3).
-    Extracted at runtime from result tags. Not hardcoded.
-    Upstream: https://github.com/dequelabs/axe-core
+    aria-*        (6 tags)   WAI-ARIA conformance — spec violations.
+                             valid-attrs, valid-roles, required-structure,
+                             naming, hidden, required-states.
+                             Source: ARIA_CATEGORIES and *_ARIA_MAP dicts.
 
-  - HTML_CodeSniffer: rule codes contain the SC
-    (e.g. 'WCAG2AA.Principle1.Guideline1_4.1_4_3'). Extracted at runtime.
-    Upstream: https://github.com/nickersk/HTML_CodeSniffer
+    bp-*         (10 tags)   Best practices — engine recommendations.
+                             landmarks, headings, keyboard, forms, tables,
+                             images, color, viewport, scripting, testability.
+                             Source: BP_CATEGORIES and *_BP_MAP dicts.
 
-To update: run `python3 engine_mappings.py --check` which loads the
-current ace.js and compares against the hardcoded mapping, reporting
-any new or removed rules.
+    A finding can carry tags from multiple tiers.  For example, an
+    invalid aria-valuenow is both wcag-4.1.2 and aria-valid-attrs.
+    Filtering by WCAG shows it under 4.1.2; filtering by ARIA shows
+    it under aria-valid-attrs.
 
-Last updated: 2026-04-20 from accessibility-checker-engine 4.0.16
+Engine mapping sources:
+
+    IBM Equal Access: IBM_SC_MAP below (158 rules → WCAG SCs).
+        Upstream: https://github.com/IBMa/equal-access
+        Package: accessibility-checker-engine (npm)
+
+    Siteimprove Alfa: WCAG SCs declared at runtime + ALFA_RULES in
+        engines/alfa.py fills gaps where Alfa metadata is missing.
+        Upstream: https://github.com/Siteimprove/alfa
+
+    axe-core: WCAG tags normalized from axe's native format
+        (wcag143 → wcag-1.4.3) in engines/axe.py.
+        Upstream: https://github.com/dequelabs/axe-core
+
+    HTML_CodeSniffer: SC extracted from rule codes
+        (WCAG2AA.Principle1.Guideline1_4.1_4_3 → 1.4.3).
+        Upstream: https://github.com/nickersk/HTML_CodeSniffer
+
+To validate IBM mappings: python3 engine_mappings.py --check
+
+Last updated: 2026-04-21
 """
 
 import re
@@ -382,8 +399,6 @@ BP_CATEGORIES = {
                  'and uniqueness, required landmarks (main, banner, etc.)',
     'headings': 'Heading hierarchy: order, presence of h1, non-empty '
                 'headings, heading vs bold misuse',
-    'aria-usage': 'Deprecated — see ARIA_CATEGORIES for fine-grained '
-                  'ARIA classifications (aria-valid-attrs, etc.)',
     'keyboard': 'Keyboard access beyond WCAG: accesskey uniqueness, '
                 'focus order semantics, tabindex values, skip links',
     'forms': 'Form usability: visible labels (not title-only), field '
@@ -418,11 +433,6 @@ AXE_BP_MAP = {
     'page-has-heading-one':                'headings',
     'empty-heading':                       'headings',
     'empty-table-header':                  'headings',
-    # ARIA usage
-    'aria-allowed-role':                   'aria-usage',
-    'aria-dialog-name':                    'aria-usage',
-    'aria-text':                           'aria-usage',
-    'aria-treeitem-name':                  'aria-usage',
     # Keyboard
     'accesskeys':                          'keyboard',
     'focus-order-semantics':               'keyboard',
@@ -452,9 +462,6 @@ IBM_BP_MAP = {
     'aria_contentinfo_misuse':             'landmarks',
     # Headings
     'heading_content_exists':              'headings',
-    # ARIA usage
-    'aria_child_valid':                    'aria-usage',
-    'element_tabbable_role_valid':         'aria-usage',
     # Forms
     'input_fields_grouped':               'forms',
     'select_options_grouped':              'forms',
@@ -549,6 +556,7 @@ IBM_ARIA_MAP = {
     # aria-valid-roles
     'aria_role_valid':              'valid-roles',
     'aria_role_allowed':            'valid-roles',
+    'element_tabbable_role_valid':  'valid-roles',
     # aria-required-structure
     'aria_child_valid':             'required-structure',
     'aria_parent_required':         'required-structure',

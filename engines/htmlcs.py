@@ -33,7 +33,7 @@ WCAG mapping:
                                         SC 1.4.3
 
     We extract the SC with htmlcs_code_to_sc() from engine_mappings.py
-    and convert it to axe-style tags ('wcag143').
+    and convert it to normalized tags ('wcag-1.4.3').
 
     There are no HTMLCS best-practice rules — every rule is
     WCAG-derived by definition (the code format requires it).
