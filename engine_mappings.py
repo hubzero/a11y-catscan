@@ -172,6 +172,104 @@ SC_META = {
 }
 
 
+# SC slug → number reverse lookup.  Built from SC_META names.
+# Slugs are W3C spec URL anchors (kebab-case short names).
+# e.g. 'contrast-minimum' → '1.4.3', 'keyboard' → '2.1.1'
+# Use for human-friendly search: --search sc:contrast-minimum
+SC_SLUGS = {
+    'non-text-content': '1.1.1',
+    'audio-only-and-video-only-prerecorded': '1.2.1',
+    'captions-prerecorded': '1.2.2',
+    'audio-description-or-media-alternative-prerecorded': '1.2.3',
+    'captions-live': '1.2.4',
+    'audio-description-prerecorded': '1.2.5',
+    'sign-language-prerecorded': '1.2.6',
+    'extended-audio-description-prerecorded': '1.2.7',
+    'media-alternative-prerecorded': '1.2.8',
+    'audio-only-live': '1.2.9',
+    'info-and-relationships': '1.3.1',
+    'meaningful-sequence': '1.3.2',
+    'sensory-characteristics': '1.3.3',
+    'orientation': '1.3.4',
+    'identify-input-purpose': '1.3.5',
+    'identify-purpose': '1.3.6',
+    'use-of-color': '1.4.1',
+    'audio-control': '1.4.2',
+    'contrast-minimum': '1.4.3',
+    'resize-text': '1.4.4',
+    'images-of-text': '1.4.5',
+    'contrast-enhanced': '1.4.6',
+    'low-or-no-background-audio': '1.4.7',
+    'visual-presentation': '1.4.8',
+    'images-of-text-no-exception': '1.4.9',
+    'reflow': '1.4.10',
+    'non-text-contrast': '1.4.11',
+    'text-spacing': '1.4.12',
+    'content-on-hover-or-focus': '1.4.13',
+    'keyboard': '2.1.1',
+    'no-keyboard-trap': '2.1.2',
+    'keyboard-no-exception': '2.1.3',
+    'character-key-shortcuts': '2.1.4',
+    'timing-adjustable': '2.2.1',
+    'pause-stop-hide': '2.2.2',
+    'no-timing': '2.2.3',
+    'interruptions': '2.2.4',
+    're-authenticating': '2.2.5',
+    'timeouts': '2.2.6',
+    'three-flashes-or-below-threshold': '2.3.1',
+    'three-flashes': '2.3.2',
+    'animation-from-interactions': '2.3.3',
+    'bypass-blocks': '2.4.1',
+    'page-titled': '2.4.2',
+    'focus-order': '2.4.3',
+    'link-purpose-in-context': '2.4.4',
+    'multiple-ways': '2.4.5',
+    'headings-and-labels': '2.4.6',
+    'focus-visible': '2.4.7',
+    'location': '2.4.8',
+    'link-purpose-link-only': '2.4.9',
+    'section-headings': '2.4.10',
+    'focus-not-obscured-minimum': '2.4.11',
+    'focus-not-obscured-enhanced': '2.4.12',
+    'focus-appearance': '2.4.13',
+    'pointer-gestures': '2.5.1',
+    'pointer-cancellation': '2.5.2',
+    'label-in-name': '2.5.3',
+    'motion-actuation': '2.5.4',
+    'target-size-enhanced': '2.5.5',
+    'concurrent-input-mechanisms': '2.5.6',
+    'dragging-movements': '2.5.7',
+    'target-size-minimum': '2.5.8',
+    'language-of-page': '3.1.1',
+    'language-of-parts': '3.1.2',
+    'unusual-words': '3.1.3',
+    'abbreviations': '3.1.4',
+    'reading-level': '3.1.5',
+    'pronunciation': '3.1.6',
+    'on-focus': '3.2.1',
+    'on-input': '3.2.2',
+    'consistent-navigation': '3.2.3',
+    'consistent-identification': '3.2.4',
+    'change-on-request': '3.2.5',
+    'consistent-help': '3.2.6',
+    'error-identification': '3.3.1',
+    'labels-or-instructions': '3.3.2',
+    'error-suggestion': '3.3.3',
+    'error-prevention-legal-financial-data': '3.3.4',
+    'help': '3.3.5',
+    'error-prevention-all': '3.3.6',
+    'redundant-entry': '3.3.7',
+    'accessible-authentication-minimum': '3.3.8',
+    'accessible-authentication-enhanced': '3.3.9',
+    'parsing': '4.1.1',
+    'name-role-value': '4.1.2',
+    'status-messages': '4.1.3',
+}
+
+# Reverse: SC number → slug
+SC_NUM_TO_SLUG = {v: k for k, v in SC_SLUGS.items()}
+
+
 def sc_level(sc):
     """Return (level, version) for a WCAG SC, e.g. ('AA', '2.1')."""
     meta = SC_META.get(sc)
@@ -184,6 +282,32 @@ def sc_name(sc):
     """Return the official W3C name for a WCAG SC, e.g. 'Contrast (Minimum)'."""
     meta = SC_META.get(sc)
     return meta[2] if meta else ''
+
+
+def sc_slug(sc):
+    """Return the W3C slug for a SC, e.g. '1.4.3' → 'contrast-minimum'."""
+    return SC_NUM_TO_SLUG.get(sc, '')
+
+
+def resolve_sc(query):
+    """Resolve a SC query to a number.  Accepts:
+        '1.4.3'            → '1.4.3'
+        'contrast-minimum'  → '1.4.3'
+        'contrast'          → '1.4.3' (prefix match)
+    """
+    query = query.strip()
+    # Direct SC number
+    if query in SC_META:
+        return query
+    # Exact slug match
+    if query in SC_SLUGS:
+        return SC_SLUGS[query]
+    # Prefix match on slug (e.g. 'contrast' matches 'contrast-minimum')
+    matches = [num for slug, num in SC_SLUGS.items()
+               if slug.startswith(query)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 # IBM Equal Access rule ID → WCAG SC(s).

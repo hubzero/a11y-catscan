@@ -19,7 +19,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from engine_mappings import (
-    sc_name, sc_level,
+    sc_name, sc_level, resolve_sc,
     EARL_FAILED, EARL_CANTTELL)
 from scanner import dedup_page, count_nodes
 
@@ -132,9 +132,13 @@ def search_findings(jsonl_path, sc=None, url_pattern=None,
     Returns:
         List of matching findings with url context.
     """
-    # Normalize SC filter
+    # Normalize SC filter — accepts number (1.4.3), slug
+    # (contrast-minimum), or tag (sc-1.4.3)
     if sc:
         sc = sc.replace('sc-', '')
+        resolved = resolve_sc(sc)
+        if resolved:
+            sc = resolved
         sc_tag = 'sc-' + sc
 
     iterator = iter_deduped(jsonl_path) if dedup else iter_jsonl(jsonl_path)
@@ -363,7 +367,7 @@ def diff_scans(old_jsonl, new_jsonl):
 
     # Add SC names
     for sc_tag, delta in sc_delta.items():
-        sc_id = sc_tag.replace('sc-', '')
+        sc_id = sc_tag[3:]  # strip 'sc-'
         delta['name'] = sc_name(sc_id)
 
     return {
