@@ -1727,6 +1727,131 @@ def _iter_report(path):
     yield from _iter_jsonl(path)
 
 
+def _dedup_page(page_data):
+    """Deduplicate findings for one page across engines.
+
+    Merges findings that share the same (selector, tag, outcome)
+    into a single finding with multi-engine attribution.  A finding's
+    primary tag is the first wcag-*, aria-*, or bp-* tag.
+
+    Outcome merging: if one engine says 'failed' and another says
+    'cantTell' for the same element+tag, they stay separate — those
+    are different confidence levels.
+
+    Returns page_data in the same format but with deduplicated lists
+    and engine attribution on each finding.
+    """
+    deduped = {}  # (selector, tag, outcome) → merged finding
+
+    for outcome in (EARL_FAILED, EARL_CANTTELL):
+        for item in page_data.get(outcome, []):
+            tags = item.get('tags', [])
+            primary_tags = [t for t in tags
+                            if t.startswith(('wcag-', 'aria-', 'bp-'))]
+            if not primary_tags:
+                primary_tags = [item.get('id', 'unknown')]
+
+            engine = item.get('engine', 'unknown')
+            rule_id = item.get('id', '')
+
+            for node in item.get('nodes', []):
+                selector = (node.get('target', [''])[0]
+                            if node.get('target') else '')
+                html = node.get('html', '')
+                msg = ''
+                for ct in ('any', 'all', 'none'):
+                    for c in node.get(ct, []):
+                        if c.get('message'):
+                            msg = c['message']
+                            break
+                    if msg:
+                        break
+
+                for ptag in primary_tags:
+                    key = (selector, ptag, outcome)
+
+                    if key not in deduped:
+                        deduped[key] = {
+                            'selector': selector,
+                            'html': html,
+                            'tags': list(tags),
+                            'outcome': outcome,
+                            'primary_tag': ptag,
+                            'description': item.get(
+                                'description', ''),
+                            'help': item.get('help', ''),
+                            'helpUrl': item.get('helpUrl', ''),
+                            'impact': item.get('impact', ''),
+                            'message': msg,
+                            'engines': {},
+                        }
+                    else:
+                        existing = deduped[key]
+                        for t in tags:
+                            if t not in existing['tags']:
+                                existing['tags'].append(t)
+                        _impacts = {
+                            'critical': 4, 'serious': 3,
+                            'moderate': 2, 'minor': 1}
+                        new_sev = _impacts.get(
+                            item.get('impact', ''), 0)
+                        old_sev = _impacts.get(
+                            existing['impact'], 0)
+                        if new_sev > old_sev:
+                            existing['impact'] = item.get(
+                                'impact', '')
+
+                    deduped[key]['engines'][engine] = {
+                        'rule': rule_id,
+                        'impact': item.get('impact', ''),
+                    }
+
+    # Rebuild page_data with deduped findings
+    result = {
+        'url': page_data.get('url', ''),
+        'timestamp': page_data.get('timestamp', ''),
+        'http_status': page_data.get('http_status'),
+        EARL_FAILED: [],
+        EARL_CANTTELL: [],
+        EARL_PASSED: page_data.get(EARL_PASSED, []),
+        EARL_INAPPLICABLE: page_data.get(EARL_INAPPLICABLE, []),
+    }
+
+    for (_, _, outcome), finding in deduped.items():
+        item = {
+            'id': finding['primary_tag'],
+            'engines': finding['engines'],
+            'engine_count': len(finding['engines']),
+            'outcome': finding['outcome'],
+            'description': finding['description'],
+            'help': finding['help'],
+            'helpUrl': finding['helpUrl'],
+            'impact': finding['impact'],
+            'tags': finding['tags'],
+            'nodes': [{
+                'target': [finding['selector']],
+                'html': finding['html'],
+                'any': ([{'message': finding['message']}]
+                        if finding['message'] else []),
+            }],
+        }
+        result[outcome].append(item)
+
+    return result
+
+
+def _iter_deduped(jsonl_path):
+    """Iterate (url, deduped_data) from a JSONL results file.
+
+    Same interface as _iter_jsonl but with cross-engine deduplication
+    applied to each page.  Findings that share the same
+    (selector, primary_tag, outcome) are merged into one finding
+    with multi-engine attribution.
+    """
+    for url, page_data in _iter_jsonl(jsonl_path):
+        yield url, _dedup_page(page_data)
+
+
 def _extract_urls_from_report(path, which=EARL_FAILED):
     """Extract URLs with failures or cantTell results from a report file."""
     urls = []
