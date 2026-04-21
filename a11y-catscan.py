@@ -2976,4 +2976,11 @@ OTHER NOTES
 
 
 if __name__ == '__main__':
-    main()
+    if '--mcp' in sys.argv:
+        # Start as MCP server (Model Context Protocol) for Claude Code.
+        # Exposes scan_page, scan_site, analyze_report, list_engines,
+        # lookup_wcag as structured tools over stdio transport.
+        from mcp_server import mcp as _mcp_server
+        _mcp_server.run(transport='stdio')
+    else:
+        main()
