@@ -92,23 +92,55 @@ function normalizeOutcome(j) {
   let target = "";
   if (j.target?.name) {
     target = j.target.name;
+    // Add id if present
     if (j.target.attributes) {
       for (const attr of j.target.attributes) {
-        if (attr.name === "class" && attr.value) {
-          target += "." + attr.value.split(" ").join(".");
+        if (attr.name === "id" && attr.value) {
+          target = "#" + attr.value;
           break;
         }
       }
+      // Fall back to class if no id
+      if (!target.startsWith("#")) {
+        for (const attr of j.target.attributes) {
+          if (attr.name === "class" && attr.value) {
+            target += "." + attr.value.split(" ").join(".");
+            break;
+          }
+        }
+      }
     }
+  }
+  // Reconstruct a minimal HTML snippet from the target
+  let html = "";
+  if (j.target?.name) {
+    html = "<" + j.target.name;
+    if (j.target.attributes) {
+      for (const attr of j.target.attributes) {
+        if (["id", "class", "role", "href", "src", "alt", "aria-label"].includes(attr.name) && attr.value) {
+          html += " " + attr.name + '="' + attr.value.substring(0, 50) + '"';
+        }
+      }
+    }
+    html += ">";
   }
 
   let message = "";
   if (j.expectations) {
     try {
       for (const [_, exp] of j.expectations) {
+        // "err" for failed outcomes, "cantTell" for uncertain ones
         if (exp.type === "err" && exp.error?.message) {
           message = exp.error.message;
           break;
+        }
+        if (exp.type === "cantTell" && exp.error?.message) {
+          message = exp.error.message;
+          break;
+        }
+        // Fallback: any message we can find
+        if (!message && exp.message) {
+          message = exp.message;
         }
       }
     } catch {
@@ -116,7 +148,7 @@ function normalizeOutcome(j) {
     }
   }
 
-  return { rule: rule_id, uri: rule_uri, wcag, target, html: target, message };
+  return { rule: rule_id, uri: rule_uri, wcag, target, html: html || target, message };
 }
 
 let server = null;
