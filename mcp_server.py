@@ -331,5 +331,202 @@ async def lookup_wcag(sc: str) -> str:
     }, indent=2)
 
 
+# ── Report analysis tools ────────────────────────────────────────
+
+from registry import (
+    register_scan, get_scan, list_scans, delete_scan,
+    search_findings, page_status, diff_scans)
+
+
+@mcp.tool()
+async def find_issues(
+    report: str,
+    sc: str = "",
+    url_pattern: str = "",
+    selector_pattern: str = "",
+    outcome: str = "",
+    engine: str = "",
+) -> str:
+    """Search a scan report for specific accessibility findings.
+
+    All filters are AND — a finding must match all specified filters.
+    Omit a filter to not filter on that field.
+
+    Args:
+        report: Path to .jsonl report, or a registered scan name
+        sc: WCAG SC filter, e.g. '1.4.3' (omit for all SCs)
+        url_pattern: URL glob, e.g. '/groups/*' or '*forum*'
+        selector_pattern: Element glob, e.g. '*table*' or '#nav*'
+        outcome: 'failed' or 'cantTell' (omit for both)
+        engine: Engine name, e.g. 'axe' (omit for all)
+
+    Returns:
+        JSON array of matching findings with URL, selector, tags,
+        engine attribution.
+    """
+    jsonl_path = _resolve_report(report)
+    if not jsonl_path:
+        return json.dumps({'error': 'Report not found: ' + report})
+
+    matches = search_findings(
+        jsonl_path,
+        sc=sc or None,
+        url_pattern=url_pattern or None,
+        selector_pattern=selector_pattern or None,
+        outcome=outcome or None,
+        engine=engine or None)
+
+    return json.dumps({
+        'report': jsonl_path,
+        'filters': {k: v for k, v in {
+            'sc': sc, 'url_pattern': url_pattern,
+            'selector_pattern': selector_pattern,
+            'outcome': outcome, 'engine': engine,
+        }.items() if v},
+        'count': len(matches),
+        'findings': matches,
+    }, indent=2)
+
+
+@mcp.tool()
+async def check_page(
+    report: str,
+    url: str,
+) -> str:
+    """Check the accessibility status of a specific page in a report.
+
+    Shows whether the page is clean, what WCAG SCs are failing,
+    how many engines agree on each finding, and the full findings list.
+
+    Args:
+        report: Path to .jsonl report, or a registered scan name
+        url: The page URL to check (exact or path match)
+
+    Returns:
+        JSON with clean status, per-SC breakdown, engine agreement,
+        and findings list.
+    """
+    jsonl_path = _resolve_report(report)
+    if not jsonl_path:
+        return json.dumps({'error': 'Report not found: ' + report})
+
+    result = page_status(jsonl_path, url)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def compare_scans(
+    old_report: str,
+    new_report: str,
+) -> str:
+    """Compare two scan reports to see what changed.
+
+    Shows fixed findings, new findings, and remaining findings
+    with per-SC deltas.
+
+    Args:
+        old_report: Path to baseline .jsonl, or registered scan name
+        new_report: Path to new .jsonl, or registered scan name
+
+    Returns:
+        JSON with summary (fixed/new/remaining counts), per-SC delta,
+        and finding details.
+    """
+    old_path = _resolve_report(old_report)
+    new_path = _resolve_report(new_report)
+    if not old_path:
+        return json.dumps({'error': 'Old report not found: ' + old_report})
+    if not new_path:
+        return json.dumps({'error': 'New report not found: ' + new_report})
+
+    result = diff_scans(old_path, new_path)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def manage_scans(
+    action: str = "list",
+    name: str = "",
+) -> str:
+    """Manage the named scan registry.
+
+    Args:
+        action: 'list' (default), 'get', or 'delete'
+        name: Scan name (required for 'get' and 'delete')
+
+    Returns:
+        JSON with scan details or the full registry.
+    """
+    if action == 'list':
+        scans = list_scans()
+        entries = []
+        for sname, info in sorted(scans.items()):
+            entries.append({
+                'name': sname,
+                'timestamp': info.get('timestamp', ''),
+                'url': info.get('url', ''),
+                'engines': info.get('engines', []),
+                'summary': info.get('summary', {}),
+            })
+        return json.dumps({'scans': entries}, indent=2)
+
+    elif action == 'get':
+        if not name:
+            return json.dumps({'error': 'name required for get'})
+        scan = get_scan(name)
+        if not scan:
+            return json.dumps({'error': 'Scan not found: ' + name})
+        return json.dumps({'name': name, **scan}, indent=2)
+
+    elif action == 'delete':
+        if not name:
+            return json.dumps({'error': 'name required for delete'})
+        removed = delete_scan(name)
+        if removed:
+            return json.dumps({
+                'deleted': name, 'ok': True})
+        return json.dumps({
+            'error': 'Scan not found: ' + name})
+
+    return json.dumps({'error': 'Unknown action: ' + action})
+
+
+def _resolve_report(name_or_path):
+    """Resolve a report reference to a JSONL path.
+
+    Accepts:
+      - A direct file path (must exist)
+      - A registered scan name (looked up in registry)
+      - A .json path (converted to .jsonl)
+    """
+    # Direct path
+    if os.path.exists(name_or_path):
+        if name_or_path.endswith('.json') and not name_or_path.endswith('.jsonl'):
+            jsonl = name_or_path + 'l'
+            if os.path.exists(jsonl):
+                return jsonl
+        return name_or_path
+
+    # Try adding .jsonl
+    if os.path.exists(name_or_path + '.jsonl'):
+        return name_or_path + '.jsonl'
+
+    # Registry lookup
+    scan = get_scan(name_or_path)
+    if scan:
+        reports = scan.get('reports', {})
+        jsonl = reports.get('jsonl', '')
+        if jsonl and os.path.exists(jsonl):
+            return jsonl
+        # Try json → jsonl
+        jp = reports.get('json', '')
+        if jp:
+            jsonl = jp.replace('.json', '.jsonl')
+            if os.path.exists(jsonl):
+                return jsonl
+
+    return None
+
+
 if __name__ == '__main__':
     mcp.run(transport='stdio')

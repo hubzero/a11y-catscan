@@ -2024,6 +2024,19 @@ def main():
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Show detailed rule/node counts for pages with issues')
 
+    # Report analysis flags (no scan needed — operate on previous reports)
+    report_group = parser.add_argument_group('report analysis')
+    report_group.add_argument('--list-scans', action='store_true',
+                              help='List all registered scan names and exit')
+    report_group.add_argument('--page-status', default=None, metavar='URL',
+                              help='Check a specific URL in the latest scan '
+                                   '(or use --name to specify which scan)')
+    report_group.add_argument('--search', default=None, metavar='SC_OR_PATTERN',
+                              help='Search findings in a report. Prefix with '
+                                   'sc: for WCAG SC (sc:1.4.3), url: for URL '
+                                   'pattern (url:/groups/*), sel: for selector '
+                                   '(sel:*table*), or engine: (engine:axe)')
+
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -2051,6 +2064,132 @@ def main():
         except Exception:
             pass
         print("Killed {} orphaned browser process(es).".format(killed))
+        sys.exit(0)
+
+    # Report analysis flags — operate on previous reports, no scan needed.
+    if args.list_scans:
+        from registry import list_scans
+        scans = list_scans()
+        if not scans:
+            print("No registered scans.")
+        else:
+            print("{} registered scan(s):\n".format(len(scans)))
+            for sname, info in sorted(scans.items()):
+                summary = info.get('summary', {})
+                status = ('clean' if summary.get('clean')
+                          else '{} failed'.format(
+                              summary.get(EARL_FAILED, '?')))
+                print("  {:<25s} {} — {} pages, {} [{} engine(s)]".format(
+                    sname,
+                    info.get('timestamp', '')[:19],
+                    summary.get('pages', '?'),
+                    status,
+                    len(info.get('engines', []))))
+                reports = info.get('reports', {})
+                if reports.get('jsonl'):
+                    print("    {}".format(reports['jsonl']))
+        sys.exit(0)
+
+    if args.page_status:
+        from registry import page_status, list_scans
+        # Find the report to check — use --name if given, else latest
+        jsonl_path = None
+        if args.output:
+            jsonl_path = os.path.join(
+                config.get('output_dir', '.'),
+                args.output + '.jsonl')
+        if not jsonl_path or not os.path.exists(jsonl_path):
+            # Use most recent registered scan
+            scans = list_scans()
+            if scans:
+                latest = max(scans.items(),
+                             key=lambda x: x[1].get('timestamp', ''))
+                reports = latest[1].get('reports', {})
+                jsonl_path = reports.get('jsonl', '')
+        if not jsonl_path or not os.path.exists(jsonl_path):
+            print("No scan report found. Run a scan first or specify --name.")
+            sys.exit(1)
+        result = page_status(jsonl_path, args.page_status)
+        if not result.get('found'):
+            print("URL not found in report: {}".format(args.page_status))
+            sys.exit(1)
+        status = 'CLEAN' if result['clean'] else 'FAILING'
+        print("{} — {} ({} failed, {} cantTell)".format(
+            result['url'], status, result['failed'], result['cantTell']))
+        if result.get('sc_breakdown'):
+            print("\n  WCAG SCs:")
+            for sc_id, info in sorted(result['sc_breakdown'].items()):
+                parts = []
+                if info['failed']:
+                    parts.append('{} failed'.format(info['failed']))
+                if info['cantTell']:
+                    parts.append('{} cantTell'.format(info['cantTell']))
+                print("    {} {} — {}".format(
+                    sc_id, info['name'], ', '.join(parts)))
+        if result.get('findings'):
+            print("\n  Findings:")
+            for f in result['findings'][:20]:
+                engines = f.get('engines', {})
+                eng_str = ('+'.join(sorted(engines))
+                           if engines else '?')
+                print("    [{}] {} — {} — {}".format(
+                    f['outcome'][:6], f['id'], eng_str,
+                    f['selector'][:50]))
+        sys.exit(0 if result['clean'] else 1)
+
+    if args.search:
+        from registry import search_findings, list_scans
+        # Parse search query
+        query = args.search
+        sc = url_pat = sel_pat = outcome_filter = eng_filter = None
+        if query.startswith('sc:'):
+            sc = query[3:]
+        elif query.startswith('url:'):
+            url_pat = query[4:]
+        elif query.startswith('sel:'):
+            sel_pat = query[4:]
+        elif query.startswith('engine:'):
+            eng_filter = query[7:]
+        elif query.startswith('outcome:'):
+            outcome_filter = query[8:]
+        else:
+            # Default: treat as SC if it looks like one, else selector
+            if re.match(r'^\d+\.\d+\.\d+$', query):
+                sc = query
+            else:
+                sel_pat = '*' + query + '*'
+        # Find report
+        jsonl_path = None
+        if args.output:
+            jsonl_path = os.path.join(
+                config.get('output_dir', '.'),
+                args.output + '.jsonl')
+        if not jsonl_path or not os.path.exists(jsonl_path):
+            scans = list_scans()
+            if scans:
+                latest = max(scans.items(),
+                             key=lambda x: x[1].get('timestamp', ''))
+                reports = latest[1].get('reports', {})
+                jsonl_path = reports.get('jsonl', '')
+        if not jsonl_path or not os.path.exists(jsonl_path):
+            print("No scan report found.")
+            sys.exit(1)
+        matches = search_findings(
+            jsonl_path, sc=sc, url_pattern=url_pat,
+            selector_pattern=sel_pat, outcome=outcome_filter,
+            engine=eng_filter)
+        print("{} finding(s) matching '{}':\n".format(
+            len(matches), args.search))
+        for m in matches[:50]:
+            engines = m.get('engines', {})
+            eng_str = ('+'.join(sorted(engines))
+                       if engines else m.get('engine', '?'))
+            print("  [{}] {} — {} — {}".format(
+                m['outcome'][:6], m['id'], eng_str,
+                m['selector'][:50]))
+            print("    {}".format(m['url']))
+        if len(matches) > 50:
+            print("\n  ... and {} more".format(len(matches) - 50))
         sys.exit(0)
 
     if args.help_audit:
@@ -2372,6 +2511,26 @@ OTHER NOTES
             'clean': total_violations == 0,
         }
         print(json.dumps(summary))
+
+    # Register scan in the named scan registry
+    if basename and jsonl_path:
+        from registry import register_scan
+        report_paths = {
+            'json': json_path,
+            'jsonl': jsonl_path,
+            'html': html_path,
+        }
+        register_scan(
+            name=basename,
+            report_paths=report_paths,
+            url=url,
+            engines=config.get('engines', ['axe']),
+            summary={
+                'pages': scanned,
+                EARL_FAILED: total_violations,
+                EARL_CANTTELL: total_incomplete,
+                'clean': total_violations == 0,
+            })
 
     # Diff against previous scan
     if args.diff and jsonl_path and os.path.exists(jsonl_path):
