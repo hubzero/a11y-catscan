@@ -2493,6 +2493,7 @@ OTHER NOTES
     scan_level_used = args.level or config.get('level', DEFAULT_LEVEL)
     include_bp_in_count = (scan_level_used == 'best')
     total_wcag_failed = 0
+    total_aria_failed = 0
     total_bp_failed = 0
     total_incomplete = 0
     violation_rules = set()
@@ -2501,10 +2502,21 @@ OTHER NOTES
             for v in data.get(EARL_FAILED, []):
                 tags = v.get('tags', [])
                 has_wcag = any(t.startswith('sc-') for t in tags)
+                has_aria = any(t.startswith('aria-') for t in tags)
+                has_bp = any(t.startswith('bp-') for t in tags)
                 nodes = _count_nodes([v])
-                if has_wcag:
+                # Classification priority: if a finding has an
+                # aria-* tag, it's an ARIA conformance issue even
+                # if IBM also mapped it to a WCAG SC.  This prevents
+                # ARIA landmark naming rules (incorrectly mapped to
+                # SC 2.4.1 by IBM) from inflating the WCAG count.
+                if has_aria:
+                    total_aria_failed += nodes
+                elif has_wcag:
                     total_wcag_failed += nodes
                     violation_rules.add(v.get('id', ''))
+                elif has_bp:
+                    total_bp_failed += nodes
                 else:
                     total_bp_failed += nodes
             total_incomplete += _count_nodes(
@@ -2519,6 +2531,8 @@ OTHER NOTES
     print("\nScan complete: {} pages in {:.1f}s ({:.1f}s/page)".format(
         scanned, wall_time, throughput))
     print("  WCAG failed: {} node(s)".format(total_wcag_failed))
+    if total_aria_failed:
+        print("  ARIA: {} node(s)".format(total_aria_failed))
     if total_bp_failed:
         print("  Best practice: {} node(s)".format(total_bp_failed))
     print("  Can't tell: {} node(s) needing manual review".format(
@@ -2529,6 +2543,7 @@ OTHER NOTES
             'pages': scanned,
             EARL_FAILED: compliance_failed,
             'wcag_failed': total_wcag_failed,
+            'aria_failed': total_aria_failed,
             'bp_failed': total_bp_failed,
             EARL_CANTTELL: total_incomplete,
             'rules': sorted(violation_rules),

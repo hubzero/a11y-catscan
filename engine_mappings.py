@@ -686,11 +686,39 @@ IBM_ARIA_MAP = {
     'aria_parent_required':         'required-structure',
     'aria_descendant_valid':        'required-structure',
     'aria_child_tabbable':          'required-structure',
-    # aria-naming
+    # aria-naming — widget/element names
     'aria_widget_labelled':         'naming',
     'aria_accessiblename_exists':   'naming',
     'aria_graphic_labelled':        'naming',
     'aria_img_labelled':            'naming',
+    # aria-naming — landmark labeling.
+    # IBM maps these to SC 2.4.1 (Bypass Blocks) but they're actually
+    # ARIA landmark naming requirements, not bypass-blocks.  SC 2.4.1
+    # is about skip-nav mechanisms, not landmark label uniqueness.
+    # Tagging as aria-naming means they show as ARIA issues, not WCAG
+    # failures, unless the user explicitly includes ARIA in their scan.
+    'aria_application_label_unique':    'naming',
+    'aria_application_labelled':        'naming',
+    'aria_article_label_unique':        'naming',
+    'aria_banner_label_unique':         'naming',
+    'aria_banner_single':               'naming',
+    'aria_complementary_label_unique':  'naming',
+    'aria_complementary_label_visible': 'naming',
+    'aria_complementary_labelled':      'naming',
+    'aria_content_in_landmark':         'naming',
+    'aria_contentinfo_label_unique':    'naming',
+    'aria_contentinfo_misuse':          'naming',
+    'aria_contentinfo_single':          'naming',
+    'aria_document_label_unique':       'naming',
+    'aria_form_label_unique':           'naming',
+    'aria_landmark_name_unique':        'naming',
+    'aria_main_label_unique':           'naming',
+    'aria_main_label_visible':          'naming',
+    'aria_navigation_label_unique':     'naming',
+    'aria_region_label_unique':         'naming',
+    'aria_region_labelled':             'naming',
+    'aria_search_label_unique':         'naming',
+    'aria_toolbar_label_unique':        'naming',
     # aria-required-states
     'aria_attribute_required':      'required-states',
 }
