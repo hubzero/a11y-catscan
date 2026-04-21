@@ -191,18 +191,169 @@ async function scanPage(pageId, cookies) {
     const alfaPage = await Playwright.toPage(page);
     const outcomes = await Audit.of(alfaPage, filteredRules).evaluate();
 
+    // Collect outcomes into arrays.  outcomes may be a single-use
+    // iterator so we materialize everything in one pass.
     const violations = [];
     const incomplete = [];
+    const rawTargets = [];  // parallel array for selector resolution
     let passes = 0;
 
     for (const outcome of outcomes) {
       const j = outcome.toJSON();
+      const t = j.target || {};
       if (j.outcome === "failed") {
         violations.push(normalizeOutcome(j));
+        rawTargets.push({
+          type: t.type,
+          name: t.name || null,
+          text: t.data || null,
+          attrs: (t.attributes || [])
+            .filter((a) => a.value)
+            .map((a) => ({ n: a.name, v: a.value })),
+        });
       } else if (j.outcome === "cantTell") {
         incomplete.push(normalizeOutcome(j));
+        rawTargets.push({
+          type: t.type,
+          name: t.name || null,
+          text: t.data || null,
+          attrs: (t.attributes || [])
+            .filter((a) => a.value)
+            .map((a) => ({ n: a.name, v: a.value })),
+        });
       } else if (j.outcome === "passed") {
         passes++;
+      }
+    }
+
+    // Resolve selectors in the live DOM while the page is still open.
+    // rawTargets was built in parallel with violations/incomplete above.
+    const allFindings = [...violations, ...incomplete];
+    if (allFindings.length > 0) {
+      try {
+        const resolved = await page.evaluate((targets) => {
+          function uniqueSelector(el) {
+            if (!el || el === document) return "html";
+            if (el.id) return "#" + CSS.escape(el.id);
+            const path = [];
+            let node = el;
+            while (node && node.parentElement) {
+              let seg = node.tagName.toLowerCase();
+              const parent = node.parentElement;
+              const sibs = Array.from(parent.children).filter(
+                (c) => c.tagName === node.tagName
+              );
+              if (sibs.length > 1) {
+                seg +=
+                  ":nth-of-type(" + (sibs.indexOf(node) + 1) + ")";
+              }
+              if (node.id) {
+                path.unshift("#" + CSS.escape(node.id));
+                break;
+              }
+              path.unshift(seg);
+              node = parent;
+            }
+            return path.join(" > ");
+          }
+
+          return targets.map((t) => {
+            // Text nodes: find the parent element by text content
+            if (t.type === "text" && t.text) {
+              // Use TreeWalker to find the text node, return its parent
+              const walker = document.createTreeWalker(
+                document.body, NodeFilter.SHOW_TEXT);
+              let node;
+              while ((node = walker.nextNode())) {
+                if (node.textContent.trim().startsWith(t.text.trim().substring(0, 20))) {
+                  const el = node.parentElement;
+                  if (el) return {
+                    selector: uniqueSelector(el),
+                    html: el.outerHTML.substring(0, 200),
+                  };
+                }
+              }
+              return null;
+            }
+
+            if (t.type !== "element" || !t.name) return null;
+
+            // Try id first
+            const idAttr = t.attrs.find((a) => a.n === "id");
+            if (idAttr) {
+              const el = document.getElementById(idAttr.v);
+              if (el)
+                return {
+                  selector: uniqueSelector(el),
+                  html: el.outerHTML.substring(0, 200),
+                };
+            }
+
+            // Build an attribute selector from all available attrs
+            let sel = t.name;
+            for (const a of t.attrs) {
+              if (["class", "id", "role", "href", "src", "name", "type",
+                   "aria-label", "aria-labelledby", "for", "action",
+                  ].includes(a.n)) {
+                sel +=
+                  "[" + a.n + "=" + JSON.stringify(a.v) + "]";
+              }
+            }
+
+            try {
+              const matches = document.querySelectorAll(sel);
+              if (matches.length === 1) {
+                return {
+                  selector: uniqueSelector(matches[0]),
+                  html: matches[0].outerHTML.substring(0, 200),
+                };
+              }
+              if (matches.length > 1) {
+                // Multiple matches — return the first with its
+                // unique selector (nth-of-type will disambiguate)
+                return {
+                  selector: uniqueSelector(matches[0]),
+                  html: matches[0].outerHTML.substring(0, 200),
+                };
+              }
+            } catch {
+              // Invalid selector — try just the tag
+            }
+
+            // Fallback: just the tag
+            try {
+              const el = document.querySelector(t.name);
+              if (el)
+                return {
+                  selector: uniqueSelector(el),
+                  html: el.outerHTML.substring(0, 200),
+                };
+            } catch {}
+
+            return null;
+          });
+        }, rawTargets);
+
+        for (let i = 0; i < allFindings.length; i++) {
+          if (resolved[i]) {
+            allFindings[i].target = resolved[i].selector;
+            allFindings[i].html = resolved[i].html;
+          }
+        }
+        // Debug: log what we attempted
+        const textTargets = rawTargets.filter(t => t.type === 'text');
+        if (textTargets.length > 0) {
+          const matched = resolved.filter(r => r !== null).length;
+          process.stderr.write(
+            "Alfa resolve: " + resolved.length + " targets, " +
+            matched + " resolved, " + textTargets.length +
+            " text nodes (text samples: " +
+            textTargets.slice(0, 3).map(t => JSON.stringify(t.text?.substring(0, 20))).join(", ") +
+            ")\n");
+        }
+      } catch (resolveErr) {
+        // Keep the original target/html if resolution fails
+        process.stderr.write("Resolve error: " + resolveErr.message + "\n");
       }
     }
 
