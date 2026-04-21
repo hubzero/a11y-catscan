@@ -257,8 +257,16 @@ class AlfaEngine(Engine):
             cwd=SCRIPT_DIR, env=env)
 
         level = self._alfa_level()
+        # Extract WCAG version from scan_level (e.g. 'wcag21aa' → '2.1')
+        max_version = '2.1'  # default
+        if self.scan_level:
+            import re
+            m = re.search(r'wcag(\d)(\d)', self.scan_level)
+            if m:
+                max_version = '{}.{}'.format(m.group(1), m.group(2))
         init_msg = json.dumps({
             'level': level,
+            'maxVersion': max_version,
             'args': ['--disable-dev-shm-usage', '--disable-gpu'],
         }) + '\n'
         self._proc.stdin.write(init_msg.encode())

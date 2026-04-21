@@ -69,15 +69,34 @@ const LEVEL_INCLUDES = {
   aaa: new Set(["a", "aa", "aaa"]),
 };
 
-function filterRulesByLevel(rules, level) {
+// WCAG SC → version mapping (which WCAG version introduced it)
+const WCAG_VERSIONS = {
+  "1.3.4": "2.1", "1.3.5": "2.1", "1.3.6": "2.1",
+  "1.4.10": "2.1", "1.4.11": "2.1", "1.4.12": "2.1", "1.4.13": "2.1",
+  "2.1.4": "2.1", "2.2.6": "2.1",
+  "2.4.11": "2.2", "2.4.12": "2.2", "2.4.13": "2.2",
+  "2.5.1": "2.1", "2.5.2": "2.1", "2.5.3": "2.1", "2.5.4": "2.1",
+  "2.5.5": "2.1", "2.5.6": "2.1", "2.5.7": "2.2", "2.5.8": "2.2",
+  "3.2.6": "2.2", "3.3.7": "2.2", "3.3.8": "2.2", "3.3.9": "2.2",
+  "4.1.3": "2.1",
+  // Everything else is 2.0 (not listed = 2.0)
+};
+
+function filterRulesByLevel(rules, level, maxVersion) {
   const allowed = LEVEL_INCLUDES[level] || LEVEL_INCLUDES["aa"];
+  // maxVersion: "2.1" means include 2.0 and 2.1 SCs, exclude 2.2
+  const allowedVersions = new Set(["2.0"]);
+  if (maxVersion >= "2.1") allowedVersions.add("2.1");
+  if (maxVersion >= "2.2") allowedVersions.add("2.2");
+
   return rules.filter((rule) => {
     const reqs = rule.toJSON().requirements || [];
     const wcag = reqs.filter((r) => r.type === "criterion");
     if (wcag.length === 0) return true;
     return wcag.some((r) => {
       const scLevel = WCAG_LEVELS[r.chapter];
-      return scLevel && allowed.has(scLevel);
+      const scVersion = WCAG_VERSIONS[r.chapter] || "2.0";
+      return scLevel && allowed.has(scLevel) && allowedVersions.has(scVersion);
     });
   });
 }
@@ -155,9 +174,9 @@ let server = null;
 let browser = null;
 let filteredRules = null;
 
-async function init(level, launchArgs) {
+async function init(level, maxVersion, launchArgs) {
   const allRules = [...Rules].map(([_, rule]) => rule);
-  filteredRules = filterRulesByLevel(allRules, level || "aa");
+  filteredRules = filterRulesByLevel(allRules, level || "aa", maxVersion || "2.1");
 
   // Launch Chromium via Playwright server.
   // The WS endpoint includes a random GUID — acts as bearer token.
@@ -376,7 +395,7 @@ for await (const line of rl) {
 
     if (!initialized) {
       const args = req.args || ["--disable-dev-shm-usage", "--disable-gpu"];
-      const wsEndpoint = await init(req.level || "aa", args);
+      const wsEndpoint = await init(req.level || "aa", req.maxVersion || "2.1", args);
       initialized = true;
       process.stdout.write(
         JSON.stringify({
