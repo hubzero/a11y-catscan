@@ -37,6 +37,18 @@ import signal
 import subprocess
 import sys
 import time
+
+# Engine rule → WCAG SC mappings (IBM, HTMLCS, SC metadata)
+try:
+    from engine_mappings import (
+        SC_META, sc_level, IBM_SC_MAP, ibm_rule_to_tags,
+        htmlcs_code_to_sc)
+except ImportError:
+    SC_META = {}
+    IBM_SC_MAP = {}
+    def sc_level(sc): return ('?', '?')
+    def ibm_rule_to_tags(rule_id): return []
+    def htmlcs_code_to_sc(code): return None
 import urllib.request
 import urllib.error
 from collections import deque
@@ -213,77 +225,26 @@ def _parse_wcag_sc(tags):
     return criteria
 
 
-# WCAG SC → conformance level and version introduced.
-# SCs added in 2.1 and 2.2 are marked; everything else is 2.0.
-_SC_META = {
-    # Perceivable
-    '1.1.1': ('A', '2.0'), '1.2.1': ('A', '2.0'), '1.2.2': ('A', '2.0'),
-    '1.2.3': ('A', '2.0'), '1.2.4': ('AA', '2.0'), '1.2.5': ('AA', '2.0'),
-    '1.2.6': ('AAA', '2.0'), '1.2.7': ('AAA', '2.0'), '1.2.8': ('AAA', '2.0'),
-    '1.2.9': ('AAA', '2.0'),
-    '1.3.1': ('A', '2.0'), '1.3.2': ('A', '2.0'), '1.3.3': ('A', '2.0'),
-    '1.3.4': ('AA', '2.1'), '1.3.5': ('AA', '2.1'), '1.3.6': ('AAA', '2.1'),
-    '1.4.1': ('A', '2.0'), '1.4.2': ('A', '2.0'), '1.4.3': ('AA', '2.0'),
-    '1.4.4': ('AA', '2.0'), '1.4.5': ('AA', '2.0'), '1.4.6': ('AAA', '2.0'),
-    '1.4.7': ('AAA', '2.0'), '1.4.8': ('AAA', '2.0'), '1.4.9': ('AAA', '2.0'),
-    '1.4.10': ('AA', '2.1'), '1.4.11': ('AA', '2.1'), '1.4.12': ('AA', '2.1'),
-    '1.4.13': ('AA', '2.1'),
-    # Operable
-    '2.1.1': ('A', '2.0'), '2.1.2': ('A', '2.0'), '2.1.3': ('AAA', '2.0'),
-    '2.1.4': ('A', '2.1'),
-    '2.2.1': ('A', '2.0'), '2.2.2': ('A', '2.0'), '2.2.3': ('AAA', '2.0'),
-    '2.2.4': ('AAA', '2.0'), '2.2.5': ('AAA', '2.0'), '2.2.6': ('AAA', '2.1'),
-    '2.3.1': ('A', '2.0'), '2.3.2': ('AAA', '2.0'), '2.3.3': ('AAA', '2.0'),
-    '2.4.1': ('A', '2.0'), '2.4.2': ('A', '2.0'), '2.4.3': ('A', '2.0'),
-    '2.4.4': ('A', '2.0'), '2.4.5': ('AA', '2.0'), '2.4.6': ('AA', '2.0'),
-    '2.4.7': ('AA', '2.0'), '2.4.8': ('AAA', '2.0'), '2.4.9': ('AAA', '2.0'),
-    '2.4.10': ('AAA', '2.0'),
-    '2.4.11': ('AA', '2.2'), '2.4.12': ('AAA', '2.2'), '2.4.13': ('AAA', '2.2'),
-    '2.5.1': ('A', '2.1'), '2.5.2': ('A', '2.1'), '2.5.3': ('A', '2.1'),
-    '2.5.4': ('A', '2.1'), '2.5.5': ('AAA', '2.1'), '2.5.6': ('AAA', '2.1'),
-    '2.5.7': ('AA', '2.2'), '2.5.8': ('AA', '2.2'),
-    # Understandable
-    '3.1.1': ('A', '2.0'), '3.1.2': ('AA', '2.0'), '3.1.3': ('AAA', '2.0'),
-    '3.1.4': ('AAA', '2.0'), '3.1.5': ('AAA', '2.0'), '3.1.6': ('AAA', '2.0'),
-    '3.2.1': ('A', '2.0'), '3.2.2': ('A', '2.0'), '3.2.3': ('AA', '2.0'),
-    '3.2.4': ('AA', '2.0'), '3.2.5': ('AAA', '2.0'), '3.2.6': ('A', '2.2'),
-    '3.3.1': ('A', '2.0'), '3.3.2': ('A', '2.0'), '3.3.3': ('AA', '2.0'),
-    '3.3.4': ('AA', '2.0'), '3.3.5': ('AAA', '2.0'), '3.3.6': ('AAA', '2.0'),
-    '3.3.7': ('A', '2.2'), '3.3.8': ('AA', '2.2'), '3.3.9': ('A', '2.2'),
-    # Robust
-    '4.1.1': ('A', '2.0'), '4.1.2': ('A', '2.0'), '4.1.3': ('AA', '2.1'),
-}
+# WCAG SC metadata and engine mappings live in engine_mappings.py.
+# Thin wrappers for backward compatibility within this file.
+_SC_META = SC_META
 
 
 def _sc_level(sc):
-    """Return (level, version) for a WCAG SC, e.g. ('AA', '2.1')."""
-    return _SC_META.get(sc, ('?', '?'))
+    """Return (level, version) for a WCAG SC."""
+    return sc_level(sc)
 
 
 def _htmlcs_code_to_sc(code):
-    """Extract WCAG SC from HTMLCS code.
-
-    E.g. 'WCAG2AA.Principle1.Guideline1_4.1_4_3.G18' → '1.4.3'
-    """
-    m = re.search(r'(\d+)_(\d+)_(\d+)', code)
-    if m:
-        return '{}.{}.{}'.format(m.group(1), m.group(2), m.group(3))
-    return None
+    """Extract WCAG SC from HTMLCS code."""
+    return htmlcs_code_to_sc(code)
 
 
 def _sc_to_wcag_tags(sc):
-    """Convert a WCAG SC number to axe-style tags for grouping."""
+    """Convert a WCAG SC number to axe-style tags."""
     if not sc:
         return []
-    lvl, ver = _sc_level(sc)
-    tags = []
-    if ver == '2.0':
-        tags.append('wcag{}'.format(sc.replace('.', '')))
-    elif ver == '2.1':
-        tags.append('wcag{}'.format(sc.replace('.', '')))
-    elif ver == '2.2':
-        tags.append('wcag{}'.format(sc.replace('.', '')))
-    return tags
+    return ['wcag{}'.format(sc.replace('.', ''))]
 
 
 def load_allowlist(path):
@@ -1338,6 +1299,11 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                     # VIOLATION/FAIL = WCAG failure
                                     # RECOMMENDATION/FAIL = best practice
                                     is_wcag = (cat == 'VIOLATION')
+                                    _ibm_tags = ibm_rule_to_tags(
+                                        r['ruleId'])
+                                    if not is_wcag:
+                                        _ibm_tags.append(
+                                            'best-practice')
                                     if outcome == 'FAIL' and (
                                             is_wcag or include_best):
                                         results['violations'].append({
@@ -1351,9 +1317,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                             'impact': 'serious'
                                                 if is_wcag
                                                 else 'minor',
-                                            'tags': ['best-practice']
-                                                if not is_wcag
-                                                else [],
+                                            'tags': _ibm_tags,
                                             'nodes': [{
                                                 'target': [
                                                     r.get('path', {})
@@ -1376,6 +1340,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                                 r.get('message', ''),
                                             'helpUrl': '',
                                             'impact': 'moderate',
+                                            'tags': _ibm_tags,
                                             'nodes': [{
                                                 'target': [
                                                     r.get('path', {})
