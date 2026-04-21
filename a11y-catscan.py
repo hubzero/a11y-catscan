@@ -116,6 +116,11 @@ WCAG_LEVELS = {
                  'wcag22aa', 'wcag22aaa'],
         'label': 'WCAG 2.2 Level AAA',
     },
+    'best': {
+        'tags': ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa',
+                 'best-practice'],
+        'label': 'WCAG 2.1 Level AA + Best Practices',
+    },
 }
 DEFAULT_LEVEL = 'wcag21aa'
 
@@ -617,6 +622,15 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
     wait_strategy = config.get('wait_until', 'networkidle')
     if wait_strategy not in ('networkidle', 'load', 'domcontentloaded', 'commit'):
         wait_strategy = 'networkidle'
+    # Scan level — determines WCAG version, conformance level,
+    # and whether best practices are included.
+    # Format: wcagXXy where XX=version (20,21,22), y=level (a,aa,aaa)
+    # Special: 'best' = WCAG 2.1 AA + all best practices
+    scan_level = level or config.get('level', 'wcag21aa')
+    include_best = scan_level == 'best'
+    if include_best:
+        scan_level = 'wcag21aa'  # base level for best
+
     # Engine selection — list of engines to run
     engines = config.get('engines', None)
     if not engines:
@@ -1230,22 +1244,29 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                 await page.add_script_tag(
                                     content=ace_source)
                                 # Map level to IBM ruleset
-                                ibm_ruleset = 'WCAG_2_1'
-                                if level and '22' in level:
+                                if '22' in scan_level:
                                     ibm_ruleset = 'WCAG_2_2'
-                                elif level and '20' in level:
+                                elif '20' in scan_level:
                                     ibm_ruleset = 'WCAG_2_0'
+                                else:
+                                    ibm_ruleset = 'WCAG_2_1'
                                 ibm_results = await page.evaluate(
                                     """(rs) => {
                                         return new ace.Checker()
                                             .check(document, [rs]);
                                     }""", ibm_ruleset)
+                                # include_best set at top of
+                                # crawl_and_scan from --level
                                 for r in ibm_results.get(
                                         'results', []):
                                     cat = r.get('value', ['', ''])[0]
                                     outcome = r.get(
                                         'value', ['', ''])[1]
-                                    if outcome == 'FAIL':
+                                    # VIOLATION/FAIL = WCAG failure
+                                    # RECOMMENDATION/FAIL = best practice
+                                    is_wcag = (cat == 'VIOLATION')
+                                    if outcome == 'FAIL' and (
+                                            is_wcag or include_best):
                                         results['violations'].append({
                                             'id': r['ruleId'],
                                             'engine': 'ibm',
@@ -1255,9 +1276,11 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                                 r.get('message', ''),
                                             'helpUrl': '',
                                             'impact': 'serious'
-                                                if cat == 'VIOLATION'
-                                                else 'moderate',
-                                            'tags': [],
+                                                if is_wcag
+                                                else 'minor',
+                                            'tags': ['best-practice']
+                                                if not is_wcag
+                                                else [],
                                             'nodes': [{
                                                 'target': [
                                                     r.get('path', {})
@@ -1303,11 +1326,10 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             try:
                                 await page.add_script_tag(
                                     content=htmlcs_source)
-                                htmlcs_std = 'WCAG2AA'
-                                if level and 'aaa' in level:
+                                if 'aaa' in scan_level:
                                     htmlcs_std = 'WCAG2AAA'
-                                elif (level and 'a' in level
-                                      and 'aa' not in level):
+                                elif ('2a' in scan_level
+                                      and 'aa' not in scan_level):
                                     htmlcs_std = 'WCAG2A'
                                 htmlcs_results = await page.evaluate(
                                     """(std) => {
