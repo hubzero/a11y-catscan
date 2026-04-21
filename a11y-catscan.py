@@ -784,7 +784,17 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         print()
 
     def _write_page(url, page_data):
-        """Append one page's results to the JSONL file."""
+        """Append one page's results to the JSONL file.
+
+        IMPORTANT: This must only be called from the main event loop
+        (the `for task in done:` block), never from worker tasks.
+        All engines' findings for a page are combined into page_data
+        before this call, so each JSONL line contains one page with
+        all engines' results together.  This single-writer design is
+        relied on for correctness — the JSONL is consumed by dedup,
+        --diff, --group-by, and report generation, all of which
+        assume one complete line per page with no interleaving.
+        """
         if not jsonl_path:
             return
         try:
@@ -1423,6 +1433,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                             v_count,
                                             len(page_data.get(EARL_CANTTELL, [])),
                                             i_count, len(queue)))
+                            # Single-writer: called from main loop only,
+                            # never from worker tasks.  See _write_page.
                             _write_page(url, page_data)
 
                             for link in new_links:
@@ -1451,6 +1463,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                     page_count += 1
                                     u2, pd2, nl2, _, el2 = r2
                                     total_page_time += el2
+                                    # Single-writer: recovery drain,
+                                    # still main loop. See _write_page.
                                     _write_page(u2, pd2)
                                     for lnk in nl2:
                                         if (lnk not in visited
@@ -1556,6 +1570,8 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                 if r2 is not None:
                                     u2, pd2, nl2, _, el2 = r2
                                     total_page_time += el2
+                                    # Single-writer: restart drain,
+                                    # still main loop. See _write_page.
                                     _write_page(u2, pd2)
                                     for lnk in nl2:
                                         if (lnk not in visited
