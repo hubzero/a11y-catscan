@@ -223,10 +223,7 @@ class AlfaEngine(Engine):
         # concurrently.
         self._lock = asyncio.Lock()
         self._ready_info = None
-
-    @classmethod
-    def browser_launch_args(cls):
-        return ['--remote-debugging-port=9222']
+        self.ws_endpoint = None  # Set after start()
 
     def _alfa_level(self):
         """Derive Alfa conformance level from scan_level."""
@@ -239,19 +236,13 @@ class AlfaEngine(Engine):
         return 'aa'
 
     async def start(self, browser=None):
-        import urllib.request as urlreq
+        """Start the Alfa Node.js subprocess.
 
-        # Verify CDP is available
-        try:
-            cdp_info = json.loads(urlreq.urlopen(
-                'http://127.0.0.1:9222/json/version',
-                timeout=5).read())
-            cdp_ws = cdp_info['webSocketDebuggerUrl']
-        except Exception as e:
-            if not self.quiet:
-                print("  Alfa: CDP not available — {}".format(e))
-            raise
-
+        Alfa launches Chromium via Playwright's launchServer() and
+        returns a GUID-protected WebSocket endpoint.  The Scanner
+        connects Python Playwright to this endpoint.  No open debug
+        ports — the GUID acts as a bearer token.
+        """
         node_path = _find_node()
         alfa_script = os.path.join(SCRIPT_DIR, 'alfa-engine.mjs')
         env = os.environ.copy()
@@ -266,23 +257,41 @@ class AlfaEngine(Engine):
             cwd=SCRIPT_DIR, env=env)
 
         level = self._alfa_level()
-        init_msg = json.dumps({'cdp': cdp_ws, 'level': level}) + '\n'
+        init_msg = json.dumps({
+            'level': level,
+            'args': ['--disable-dev-shm-usage', '--disable-gpu'],
+        }) + '\n'
         self._proc.stdin.write(init_msg.encode())
         await self._proc.stdin.drain()
 
-        ready_line = await self._proc.stdout.readline()
+        ready_line = await asyncio.wait_for(
+            self._proc.stdout.readline(), timeout=30)
         self._ready_info = json.loads(ready_line)
+
+        if not self._ready_info.get('ok'):
+            raise RuntimeError('Alfa init failed: {}'.format(
+                self._ready_info.get('error', '?')))
+
+        self.ws_endpoint = self._ready_info.get('wsEndpoint')
         if not self.quiet:
-            print("  Alfa: {} rules at level {}".format(
+            print("  Alfa: {} rules at level {} (server ready)".format(
                 self._ready_info.get('rules', '?'),
                 self._ready_info.get('level', '?')))
 
-    async def _run_alfa(self, page_url):
-        """Send a page URL to Alfa for scanning, return raw results."""
+    async def _run_alfa(self, page_url, cookies=None):
+        """Send a page URL to Alfa for scanning, return raw results.
+
+        Alfa navigates to the URL in its own context within the shared
+        browser.  Cookies are forwarded from the Python auth session
+        so Alfa sees the same content as the other engines.
+        """
         if not self._proc or self._proc.returncode is not None:
             return None
         async with self._lock:
-            msg = json.dumps({'pageId': page_url}) + '\n'
+            msg = json.dumps({
+                'pageId': page_url,
+                'cookies': cookies or [],
+            }) + '\n'
             self._proc.stdin.write(msg.encode())
             await self._proc.stdin.drain()
             line = await asyncio.wait_for(
@@ -296,7 +305,21 @@ class AlfaEngine(Engine):
 
         out = []
         try:
-            alfa_result = await self._run_alfa(page.url)
+            # Forward auth cookies so Alfa sees the same page
+            cookies = []
+            try:
+                raw_cookies = await page.context.cookies()
+                # Playwright cookie format works directly with addCookies
+                cookies = [{
+                    'name': c['name'],
+                    'value': c['value'],
+                    'domain': c.get('domain', ''),
+                    'path': c.get('path', '/'),
+                } for c in raw_cookies]
+            except Exception:
+                pass
+
+            alfa_result = await self._run_alfa(page.url, cookies)
             if not alfa_result or not alfa_result.get('ok'):
                 return []
 

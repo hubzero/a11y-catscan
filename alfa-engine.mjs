@@ -1,23 +1,21 @@
 /**
- * alfa-engine.mjs — Siteimprove Alfa engine for a11y-catscan.
+ * alfa-engine.mjs — Siteimprove Alfa engine + Playwright browser server.
  *
- * Long-running subprocess that connects to an existing Chromium browser
- * via CDP and runs Alfa rules on pages already loaded by the Python crawler.
+ * This subprocess serves two roles:
+ *   1. Launches Chromium via Playwright's launchServer() and provides
+ *      a GUID-protected WebSocket endpoint for the Python scanner.
+ *   2. Runs Alfa accessibility rules on pages by navigating to them
+ *      in its own browser context (with cookies from Python for auth).
+ *
+ * Security: The WebSocket endpoint includes a random GUID — only
+ * clients that know the full URL can connect.  No open debug ports.
  *
  * Protocol:
- *   Init:   {"cdp": "ws://...", "level": "aa"}
- *   Scan:   {"pageId": "URL", "targetId": "CDP_TARGET_ID"}
- *   Quit:   {"quit": true}
- *
- *   Ready:  {"ok": true, "ready": true, "rules": N, "level": "aa"}
- *   Result: {"ok": true, "pageId": "...", "violations": [...], "incomplete": [...], "passes": N}
- *
- * Page discovery:
- *   Playwright manages pages via its internal pipe transport, not CDP.
- *   The CDP /json/list endpoint doesn't see Playwright-managed pages.
- *   Instead, Python sends the targetId (from Target.getTargetInfo) and
- *   we use browser.contexts() to find it, or create a CDP session to
- *   attach to it directly.
+ *   Init (stdin):   {"level": "aa", "args": [...]}
+ *   Ready (stdout): {"ok": true, "wsEndpoint": "ws://...", "rules": N}
+ *   Scan (stdin):   {"pageId": "URL", "cookies": [{name,value,domain,path}]}
+ *   Result (stdout): {"ok": true, "violations": [...], "incomplete": [...]}
+ *   Quit (stdin):   {"quit": true}
  */
 
 import { Playwright } from "@siteimprove/alfa-playwright";
@@ -121,57 +119,43 @@ function normalizeOutcome(j) {
   return { rule: rule_id, uri: rule_uri, wcag, target, html: target, message };
 }
 
+let server = null;
 let browser = null;
 let filteredRules = null;
 
-async function init(cdpUrl, level) {
+async function init(level, launchArgs) {
   const allRules = [...Rules].map(([_, rule]) => rule);
   filteredRules = filterRulesByLevel(allRules, level || "aa");
-  browser = await chromium.connectOverCDP(cdpUrl);
+
+  // Launch Chromium via Playwright server.
+  // The WS endpoint includes a random GUID — acts as bearer token.
+  server = await chromium.launchServer({
+    headless: true,
+    args: launchArgs || ["--disable-dev-shm-usage", "--disable-gpu"],
+  });
+
+  // Connect to our own server for Alfa scanning
+  browser = await chromium.connect(server.wsEndpoint());
+
+  return server.wsEndpoint();
 }
 
-async function findPage(pageId, targetId) {
-  // Strategy 1: search all contexts by URL (works if CDP exposes pages)
-  for (const ctx of browser.contexts()) {
-    for (const page of ctx.pages()) {
-      if (page.url() === pageId) {
-        return page;
-      }
-    }
+async function scanPage(pageId, cookies) {
+  // Create a fresh context with auth cookies, navigate, scan, close.
+  // Each scan gets its own context so cookies don't leak between scans
+  // and the context is cleaned up after.
+  const ctxOptions = {};
+  const ctx = await browser.newContext(ctxOptions);
+
+  // Set auth cookies if provided
+  if (cookies && cookies.length > 0) {
+    await ctx.addCookies(cookies);
   }
 
-  // Strategy 2: use the CDP target ID to navigate to the page.
-  // When Playwright manages pages via pipe transport, connectOverCDP
-  // doesn't see them in contexts().  But we can create a new page via
-  // CDP that navigates to the same URL — Alfa will scan the fresh load.
-  // This is a fallback that costs one extra page load.
-  if (pageId) {
-    try {
-      const ctx = browser.contexts()[0] || await browser.newContext();
-      const page = await ctx.newPage();
-      await page.goto(pageId, { waitUntil: "networkidle", timeout: 60000 });
-      return page;
-    } catch (e) {
-      // If navigation fails, return null
-      return null;
-    }
-  }
-
-  return null;
-}
-
-async function scanPage(pageId, targetId) {
-  // Find or load the page
-  const page = await findPage(pageId, targetId);
-  if (!page) {
-    return { ok: false, pageId, error: "Page not found and could not be loaded" };
-  }
-
-  // Track whether we created the page (need to close it after)
-  const weCreatedPage = !browser.contexts().some(ctx =>
-    ctx.pages().some(p => p === page && p.url() === pageId));
-
+  const page = await ctx.newPage();
   try {
+    await page.goto(pageId, { waitUntil: "networkidle", timeout: 60000 });
+
     const alfaPage = await Playwright.toPage(page);
     const outcomes = await Audit.of(alfaPage, filteredRules).evaluate();
 
@@ -191,11 +175,11 @@ async function scanPage(pageId, targetId) {
     }
 
     return { ok: true, pageId, violations, incomplete, passes };
+  } catch (e) {
+    return { ok: false, pageId, error: e.message };
   } finally {
-    // Close the page if we created it (fallback navigation)
-    if (weCreatedPage) {
-      try { await page.close(); } catch {}
-    }
+    await page.close();
+    await ctx.close();
   }
 }
 
@@ -208,18 +192,14 @@ for await (const line of rl) {
     const req = JSON.parse(line.trim());
 
     if (!initialized) {
-      if (!req.cdp) {
-        process.stdout.write(
-          JSON.stringify({ ok: false, error: "First message must include 'cdp' WebSocket URL" }) + "\n"
-        );
-        continue;
-      }
-      await init(req.cdp, req.level || "aa");
+      const args = req.args || ["--disable-dev-shm-usage", "--disable-gpu"];
+      const wsEndpoint = await init(req.level || "aa", args);
       initialized = true;
       process.stdout.write(
         JSON.stringify({
           ok: true,
           ready: true,
+          wsEndpoint,
           rules: filteredRules.length,
           level: req.level || "aa",
         }) + "\n"
@@ -228,7 +208,7 @@ for await (const line of rl) {
     }
 
     if (req.pageId) {
-      const result = await scanPage(req.pageId, req.targetId || null);
+      const result = await scanPage(req.pageId, req.cookies || []);
       process.stdout.write(JSON.stringify(result) + "\n");
     } else if (req.quit) {
       break;
@@ -240,7 +220,10 @@ for await (const line of rl) {
   }
 }
 
-// Disconnect (don't close — Python owns the browser)
+// Shut down
 if (browser) {
-  try { browser.close(); } catch {}
+  try { await browser.close(); } catch {}
+}
+if (server) {
+  try { await server.close(); } catch {}
 }
