@@ -122,7 +122,7 @@ def search_findings(jsonl_path, sc=None, url_pattern=None,
 
     Args:
         jsonl_path: Path to .jsonl report file
-        sc: WCAG SC filter, e.g. '1.4.3' or 'wcag-1.4.3'
+        sc: WCAG SC filter, e.g. '1.4.3' or 'sc-1.4.3'
         url_pattern: URL glob pattern, e.g. '/groups/*' or '*forum*'
         selector_pattern: CSS selector glob, e.g. '*table*'
         outcome: 'failed' or 'cantTell'
@@ -134,8 +134,8 @@ def search_findings(jsonl_path, sc=None, url_pattern=None,
     """
     # Normalize SC filter
     if sc:
-        sc = sc.replace('wcag-', '')
-        sc_tag = 'wcag-' + sc
+        sc = sc.replace('sc-', '')
+        sc_tag = 'sc-' + sc
 
     iterator = iter_deduped(jsonl_path) if dedup else iter_jsonl(jsonl_path)
     matches = []
@@ -248,8 +248,8 @@ def page_status(jsonl_path, url, dedup=True):
     sc_breakdown = {}
     for item in failed + cant_tell:
         for tag in item.get('tags', []):
-            if tag.startswith('wcag-'):
-                sc_id = tag.replace('wcag-', '')
+            if tag.startswith('sc-'):
+                sc_id = tag.replace('sc-', '')
                 if sc_id not in sc_breakdown:
                     sc_breakdown[sc_id] = {
                         'name': sc_name(sc_id),
@@ -314,7 +314,7 @@ def diff_scans(old_jsonl, new_jsonl):
             path = urlparse(url).path
             for item in data.get(EARL_FAILED, []):
                 for tag in item.get('tags', []):
-                    if tag.startswith('wcag-'):
+                    if tag.startswith('sc-'):
                         selector = ''
                         if item.get('nodes'):
                             selector = (
@@ -363,7 +363,7 @@ def diff_scans(old_jsonl, new_jsonl):
 
     # Add SC names
     for sc_tag, delta in sc_delta.items():
-        sc_id = sc_tag.replace('wcag-', '')
+        sc_id = sc_tag.replace('sc-', '')
         delta['name'] = sc_name(sc_id)
 
     return {

@@ -181,7 +181,7 @@ async def analyze_report(
 
                             if group_by == 'wcag':
                                 keys = [t for t in tags
-                                        if t.startswith('wcag-')]
+                                        if t.startswith('sc-')]
                             elif group_by == 'engine':
                                 engines_dict = item.get('engines', {})
                                 if engines_dict:
@@ -195,7 +195,7 @@ async def analyze_report(
                                             ('bp-', 'aria-'))]
                                 if not keys:
                                     keys = [t for t in tags
-                                            if t.startswith('wcag-')]
+                                            if t.startswith('sc-')]
                             else:
                                 keys = [item.get('id', '?')]
 
@@ -223,7 +223,7 @@ async def analyze_report(
     for key, info in sorted(groups.items(),
                             key=lambda x: x[1]['count'],
                             reverse=True):
-        sc = key.replace('wcag-', '') if key.startswith('wcag-') else ''
+        sc = key.replace('sc-', '') if key.startswith('sc-') else ''
         result.append({
             'key': key,
             'sc_name': sc_name(sc) if sc else '',
@@ -294,12 +294,12 @@ async def lookup_wcag(sc: str) -> str:
     which engines have rules that test this criterion.
 
     Args:
-        sc: SC number like '1.4.3' or tag like 'wcag-1.4.3'
+        sc: SC number like '1.4.3' or tag like 'sc-1.4.3'
 
     Returns:
         JSON with SC details and cross-engine rule mapping.
     """
-    sc = sc.replace('wcag-', '').strip()
+    sc = sc.replace('sc-', '').strip()
     meta = SC_META.get(sc)
     if not meta:
         return json.dumps({
@@ -322,7 +322,7 @@ async def lookup_wcag(sc: str) -> str:
 
     return json.dumps({
         'sc': sc,
-        'tag': 'wcag-' + sc,
+        'tag': 'sc-' + sc,
         'name': name,
         'level': level,
         'wcag_version': version,

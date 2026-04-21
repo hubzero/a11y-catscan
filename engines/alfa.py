@@ -328,7 +328,7 @@ class AlfaEngine(Engine):
                 for v in items:
                     rule_id = v['rule']
                     tags = [
-                        'wcag-' + sc
+                        'sc-' + sc
                         for sc in v.get('wcag', [])]
                     # Add ARIA and best-practice tags
                     aria_cat = aria_category('alfa', rule_id)

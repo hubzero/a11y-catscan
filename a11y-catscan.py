@@ -114,14 +114,14 @@ _count_nodes = count_nodes
 def _parse_wcag_sc(tags):
     """Extract WCAG success criteria numbers from tags.
 
-    Handles normalized format 'wcag-1.4.3' (preferred) and legacy
+    Handles normalized format 'sc-1.4.3' (preferred) and legacy
     axe-core format 'wcag143'.  Level tags like 'wcag2a' are ignored.
     """
     criteria = set()
     for tag in tags:
-        # Normalized format: wcag-X.Y.Z
-        if tag.startswith('wcag-'):
-            sc = tag[5:]  # strip 'wcag-'
+        # Normalized format: sc-X.Y.Z
+        if tag.startswith('sc-'):
+            sc = tag[3:]  # strip 'sc-'
             if re.match(r'^\d+\.\d+\.\d+$', sc):
                 criteria.add(sc)
             continue
@@ -2488,8 +2488,8 @@ OTHER NOTES
     # Summary (single pass through JSONL).
     # Separate WCAG failures from best-practice/ARIA-only failures.
     # The --level setting determines what counts as a compliance failure:
-    #   wcag*  → only wcag-* tagged failures count
-    #   best   → wcag-* AND bp-*/aria-* failures count
+    #   wcag*  → only sc-* tagged failures count
+    #   best   → sc-* AND bp-*/aria-* failures count
     scan_level_used = args.level or config.get('level', DEFAULT_LEVEL)
     include_bp_in_count = (scan_level_used == 'best')
     total_wcag_failed = 0
@@ -2500,7 +2500,7 @@ OTHER NOTES
         for _, data in _iter_deduped(jsonl_path):
             for v in data.get(EARL_FAILED, []):
                 tags = v.get('tags', [])
-                has_wcag = any(t.startswith('wcag-') for t in tags)
+                has_wcag = any(t.startswith('sc-') for t in tags)
                 nodes = _count_nodes([v])
                 if has_wcag:
                     total_wcag_failed += nodes

@@ -67,7 +67,7 @@ from engine_mappings import (
 def _normalize_axe_tags(tags):
     """Convert axe-core native tags to normalized format.
 
-    axe-core tags like 'wcag143' (SC 1.4.3) become 'wcag-1.4.3'.
+    axe-core tags like 'wcag143' (SC 1.4.3) become 'sc-1.4.3'.
     Level tags like 'wcag2a', 'wcag21aa' are dropped (internal to axe).
     Other tags (cat.*, best-practice, ACT) are kept as-is.
     """
@@ -76,7 +76,7 @@ def _normalize_axe_tags(tags):
         # SC tags: wcag + single digit + single digit + one-or-more digits
         m = re.match(r'^wcag(\d)(\d)(\d+)$', tag)
         if m:
-            out.append('wcag-{}.{}.{}'.format(
+            out.append('sc-{}.{}.{}'.format(
                 m.group(1), m.group(2), m.group(3)))
         elif re.match(r'^wcag\d+a', tag):
             # Level/version tags like wcag2a, wcag21aa — drop
@@ -269,7 +269,7 @@ class AxeEngine(Engine):
             for item in axe_results.get(axe_key, []):
                 item['engine'] = 'axe'
                 item['outcome'] = earl
-                # Normalize axe tags: wcag143 → wcag-1.4.3
+                # Normalize axe tags: wcag143 → sc-1.4.3
                 item['tags'] = _normalize_axe_tags(
                     item.get('tags', []))
                 # Tag best-practice and ARIA items

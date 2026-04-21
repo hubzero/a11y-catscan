@@ -5,8 +5,8 @@ Three-tier tag system:
 
     Every finding from every engine is tagged with at least one of:
 
-    wcag-X.Y.Z   (87 tags)  WCAG Success Criteria — compliance failures.
-                             One tag per SC, e.g. wcag-1.4.3 for Contrast.
+    sc-X.Y.Z   (87 tags)  WCAG Success Criteria — compliance failures.
+                             One tag per SC, e.g. sc-1.4.3 for Contrast.
                              Source: SC_META dict below.
 
     aria-*        (6 tags)   WAI-ARIA conformance — spec violations.
@@ -20,7 +20,7 @@ Three-tier tag system:
                              Source: BP_CATEGORIES and *_BP_MAP dicts.
 
     A finding can carry tags from multiple tiers.  For example, an
-    invalid aria-valuenow is both wcag-4.1.2 and aria-valid-attrs.
+    invalid aria-valuenow is both sc-4.1.2 and aria-valid-attrs.
     Filtering by WCAG shows it under 4.1.2; filtering by ARIA shows
     it under aria-valid-attrs.
 
@@ -35,7 +35,7 @@ Engine mapping sources:
         Upstream: https://github.com/Siteimprove/alfa
 
     axe-core: WCAG tags normalized from axe's native format
-        (wcag143 → wcag-1.4.3) in engines/axe.py.
+        (wcag143 → sc-1.4.3) in engines/axe.py.
         Upstream: https://github.com/dequelabs/axe-core
 
     HTML_CodeSniffer: SC extracted from rule codes
@@ -357,9 +357,9 @@ def ibm_rule_to_sc(rule_id):
 
 
 def ibm_rule_to_tags(rule_id):
-    """Map an IBM rule ID to normalized WCAG tags (wcag-X.Y.Z format)."""
+    """Map an IBM rule ID to normalized WCAG tags (sc-X.Y.Z format)."""
     scs = ibm_rule_to_sc(rule_id)
-    return ['wcag-' + sc for sc in scs]
+    return ['sc-' + sc for sc in scs]
 
 
 def htmlcs_code_to_sc(code):

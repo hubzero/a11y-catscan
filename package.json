@@ -12,6 +12,6 @@
     "accessibility-checker-engine": "^4.0.16",
     "axe-core": "^4.11.3",
     "html_codesniffer": "^2.5.1",
-    "playwright": "^1.59.1"
+    "playwright": "^1.58.0"
   }
 }

@@ -17,7 +17,7 @@ Normalized result format (one dict per finding):
         'help':        str,   # Short help text
         'helpUrl':     str,   # URL to detailed documentation
         'impact':      str,   # 'critical', 'serious', 'moderate', 'minor'
-        'tags':        list,  # 'wcag-1.4.3', 'aria-valid-roles', 'bp-landmarks'
+        'tags':        list,  # 'sc-1.4.3', 'aria-valid-roles', 'bp-landmarks'
         'nodes':       list,  # Affected DOM nodes (see below)
     }
 
