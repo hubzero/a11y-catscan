@@ -217,6 +217,10 @@ class AlfaEngine(Engine):
     def __init__(self, scan_level, verbose=False, quiet=False):
         super().__init__(scan_level, verbose, quiet)
         self._proc = None
+        # Alfa's Node.js subprocess is single-threaded and processes
+        # one page at a time via stdin/stdout.  The lock serializes
+        # scan requests when multiple async workers try to use Alfa
+        # concurrently.
         self._lock = asyncio.Lock()
         self._ready_info = None
 
