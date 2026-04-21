@@ -114,7 +114,7 @@ def dedup_page(page_data):
         for item in page_data.get(outcome, []):
             tags = item.get('tags', [])
             primary_tags = [t for t in tags
-                            if t.startswith(('wcag-', 'aria-', 'bp-'))]
+                            if t.startswith(('sc-', 'aria-', 'bp-'))]
             if not primary_tags:
                 primary_tags = [item.get('id', 'unknown')]
 

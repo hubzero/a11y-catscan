@@ -33,7 +33,7 @@ WCAG mapping:
                                         SC 1.4.3
 
     We extract the SC with htmlcs_code_to_sc() from engine_mappings.py
-    and convert it to normalized tags ('wcag-1.4.3').
+    and convert it to normalized tags ('sc-1.4.3').
 
     There are no HTMLCS best-practice rules — every rule is
     WCAG-derived by definition (the code format requires it).
@@ -169,7 +169,7 @@ def _sc_to_wcag_tags(sc):
     """Convert a WCAG SC number like '1.4.3' to normalized tags."""
     if not sc:
         return []
-    return ['wcag-{}'.format(sc)]
+    return ['sc-{}'.format(sc)]
 
 
 class HtmlcsEngine(Engine):
