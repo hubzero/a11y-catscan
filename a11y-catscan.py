@@ -41,14 +41,23 @@ import time
 # Engine rule → WCAG SC mappings (IBM, HTMLCS, SC metadata)
 try:
     from engine_mappings import (
-        SC_META, sc_level, IBM_SC_MAP, ibm_rule_to_tags,
-        htmlcs_code_to_sc)
+        SC_META, sc_level, sc_name, IBM_SC_MAP, ibm_rule_to_tags,
+        htmlcs_code_to_sc,
+        EARL_FAILED, EARL_CANTTELL, EARL_PASSED, EARL_INAPPLICABLE)
 except ImportError:
     SC_META = {}
     IBM_SC_MAP = {}
     def sc_level(sc): return ('?', '?')
+    def sc_name(sc): return ''
     def ibm_rule_to_tags(rule_id): return []
     def htmlcs_code_to_sc(code): return None
+    EARL_FAILED = 'failed'
+    EARL_CANTTELL = 'cantTell'
+    EARL_PASSED = 'passed'
+    EARL_INAPPLICABLE = 'inapplicable'
+
+# Engine classes — pluggable accessibility scan engines (engines/ package)
+from engines import AxeEngine, IbmEngine, HtmlcsEngine, AlfaEngine
 import urllib.request
 import urllib.error
 from collections import deque
@@ -153,71 +162,92 @@ def _count_nodes(result_list):
     return total
 
 
-# WCAG success criteria names (subset — covers all criteria axe-core tests)
-WCAG_SC_NAMES = {
-    '1.1.1': 'Non-text Content',
-    '1.2.1': 'Audio-only and Video-only',
-    '1.2.2': 'Captions (Prerecorded)',
-    '1.2.3': 'Audio Description or Media Alternative',
-    '1.2.5': 'Audio Description (Prerecorded)',
-    '1.3.1': 'Info and Relationships',
-    '1.3.2': 'Meaningful Sequence',
-    '1.3.3': 'Sensory Characteristics',
-    '1.3.4': 'Orientation',
-    '1.3.5': 'Identify Input Purpose',
-    '1.4.1': 'Use of Color',
-    '1.4.2': 'Audio Control',
-    '1.4.3': 'Contrast (Minimum)',
-    '1.4.4': 'Resize Text',
-    '1.4.5': 'Images of Text',
-    '1.4.6': 'Contrast (Enhanced)',
-    '1.4.10': 'Reflow',
-    '1.4.11': 'Non-text Contrast',
-    '1.4.12': 'Text Spacing',
-    '1.4.13': 'Content on Hover or Focus',
-    '2.1.1': 'Keyboard',
-    '2.1.2': 'No Keyboard Trap',
-    '2.1.4': 'Character Key Shortcuts',
-    '2.2.1': 'Timing Adjustable',
-    '2.2.2': 'Pause, Stop, Hide',
-    '2.3.1': 'Three Flashes or Below Threshold',
-    '2.4.1': 'Bypass Blocks',
-    '2.4.2': 'Page Titled',
-    '2.4.3': 'Focus Order',
-    '2.4.4': 'Link Purpose (In Context)',
-    '2.4.5': 'Multiple Ways',
-    '2.4.6': 'Headings and Labels',
-    '2.4.7': 'Focus Visible',
-    '2.5.1': 'Pointer Gestures',
-    '2.5.2': 'Pointer Cancellation',
-    '2.5.3': 'Label in Name',
-    '2.5.4': 'Motion Actuation',
-    '3.1.1': 'Language of Page',
-    '3.1.2': 'Language of Parts',
-    '3.2.1': 'On Focus',
-    '3.2.2': 'On Input',
-    '3.3.1': 'Error Identification',
-    '3.3.2': 'Labels or Instructions',
-    '3.3.3': 'Error Suggestion',
-    '3.3.4': 'Error Prevention (Legal, Financial, Data)',
-    '4.1.1': 'Parsing',
-    '4.1.2': 'Name, Role, Value',
-    '4.1.3': 'Status Messages',
-}
+# SC names now come from SC_META in engine_mappings.py via sc_name().
+
+# JavaScript element resolver — injected into each page after all engines
+# scan, resolves every finding's element reference to a uniform CSS selector
+# and outer HTML snippet.  Handles axe CSS selectors, IBM XPaths, and
+# Alfa tag+attribute references.  Runs in ~0.2ms per node.
+_ELEMENT_RESOLVER_JS = """(refs) => {
+    function findEl(ref) {
+        // CSS selector (axe, or any valid selector)
+        if (ref.css) {
+            try { return document.querySelector(ref.css); } catch(e) {}
+        }
+        // XPath (IBM)
+        if (ref.xpath) {
+            try {
+                return document.evaluate(ref.xpath, document, null,
+                    XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+            } catch(e) {}
+        }
+        // ID lookup (Alfa or any engine that provides id)
+        if (ref.id) {
+            let el = document.getElementById(ref.id);
+            if (el) return el;
+        }
+        // Tag + attributes (Alfa fallback)
+        if (ref.tag) {
+            let sel = ref.tag;
+            if (ref.attrs) {
+                for (const [k, v] of Object.entries(ref.attrs)) {
+                    sel += '[' + k + '=' + JSON.stringify(v) + ']';
+                }
+            }
+            try { return document.querySelector(sel); } catch(e) {}
+        }
+        return null;
+    }
+
+    function uniqueSelector(el) {
+        if (!el || el === document) return 'html';
+        if (el.id) return '#' + CSS.escape(el.id);
+        let path = [];
+        let node = el;
+        while (node && node.parentElement) {
+            let seg = node.tagName.toLowerCase();
+            let parent = node.parentElement;
+            let siblings = Array.from(parent.children)
+                .filter(c => c.tagName === node.tagName);
+            if (siblings.length > 1) {
+                seg += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+            }
+            if (node.id) {
+                path.unshift('#' + CSS.escape(node.id));
+                break;
+            }
+            path.unshift(seg);
+            node = parent;
+        }
+        return path.join(' > ');
+    }
+
+    return refs.map(ref => {
+        let el = findEl(ref);
+        if (!el) return null;
+        return {
+            selector: uniqueSelector(el),
+            html: el.outerHTML.substring(0, 200),
+        };
+    });
+}"""
 
 
 def _parse_wcag_sc(tags):
-    """Extract WCAG success criteria numbers from axe-core tags.
+    """Extract WCAG success criteria numbers from tags.
 
-    Tags like 'wcag111' -> '1.1.1', 'wcag143' -> '1.4.3',
-    'wcag2a' / 'wcag21aa' (level tags) are ignored.
+    Handles normalized format 'wcag-1.4.3' (preferred) and legacy
+    axe-core format 'wcag143'.  Level tags like 'wcag2a' are ignored.
     """
     criteria = set()
     for tag in tags:
-        # axe-core tags encode SC numbers as concatenated digits: 'wcag143' = SC 1.4.3.
-        # Level tags like 'wcag2a' and 'wcag21aa' have fewer than 3 digits or contain
-        # letters, so the \d+ group won't match them.  The third group is \d+ (not \d)
-        # to handle two-digit sub-clauses like SC 1.4.10 → 'wcag1410'.
+        # Normalized format: wcag-X.Y.Z
+        if tag.startswith('wcag-'):
+            sc = tag[5:]  # strip 'wcag-'
+            if re.match(r'^\d+\.\d+\.\d+$', sc):
+                criteria.add(sc)
+            continue
+        # Legacy axe format: wcagXYZ (digits only, no dots)
         m = re.match(r'^wcag(\d)(\d)(\d+)$', tag)
         if m:
             sc = '{}.{}.{}'.format(m.group(1), m.group(2), m.group(3))
@@ -241,10 +271,10 @@ def _htmlcs_code_to_sc(code):
 
 
 def _sc_to_wcag_tags(sc):
-    """Convert a WCAG SC number to axe-style tags."""
+    """Convert a WCAG SC number to normalized tags."""
     if not sc:
         return []
-    return ['wcag{}'.format(sc.replace('.', ''))]
+    return ['wcag-{}'.format(sc)]
 
 
 def load_allowlist(path):
@@ -666,48 +696,33 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         scan_level = 'wcag21aa'  # base level for best
 
     # Engine selection — list of engines to run
-    engines = config.get('engines', None)
-    if not engines:
+    engine_names = config.get('engines', None)
+    if not engine_names:
         # Legacy single-engine config
         e = config.get('engine', 'axe')
         if e == 'all':
-            engines = ['axe', 'alfa', 'ibm', 'htmlcs']
+            engine_names = ['axe', 'alfa', 'ibm', 'htmlcs']
         elif e == 'both':
-            engines = ['axe', 'alfa']
+            engine_names = ['axe', 'alfa']
         else:
-            engines = [e] if e in ('axe', 'alfa', 'ibm', 'htmlcs') else ['axe']
-    use_axe = 'axe' in engines
-    use_alfa = 'alfa' in engines
-    use_ibm = 'ibm' in engines
-    use_htmlcs = 'htmlcs' in engines
-    if use_axe:
-        axe_source = load_axe_source()
-    else:
-        axe_source = None
-    ace_source = None
-    if use_ibm:
-        ace_path = os.path.join(
-            SCRIPT_DIR, 'node_modules',
-            'accessibility-checker-engine', 'ace.js')
-        if os.path.exists(ace_path):
-            with open(ace_path, 'r') as f:
-                ace_source = f.read()
-        else:
-            print("ERROR: IBM Equal Access not found. "
-                  "Run: npm install", file=sys.stderr)
-            use_ibm = False
-    htmlcs_source = None
-    if use_htmlcs:
-        htmlcs_path = os.path.join(
-            SCRIPT_DIR, 'node_modules',
-            'html_codesniffer', 'build', 'HTMLCS.js')
-        if os.path.exists(htmlcs_path):
-            with open(htmlcs_path, 'r') as f:
-                htmlcs_source = f.read()
-        else:
-            print("ERROR: HTML_CodeSniffer not found. "
-                  "Run: npm install", file=sys.stderr)
-            use_htmlcs = False
+            engine_names = [e] if e in ('axe', 'alfa', 'ibm', 'htmlcs') else ['axe']
+    # Instantiate engine objects
+    scan_engines = []
+    for ename in engine_names:
+        if ename == 'axe':
+            scan_engines.append(AxeEngine(
+                scan_level, verbose=verbose, quiet=quiet,
+                tags=tags, rules=rules))
+        elif ename == 'ibm':
+            scan_engines.append(IbmEngine(
+                scan_level, verbose=verbose, quiet=quiet,
+                include_best=include_best))
+        elif ename == 'htmlcs':
+            scan_engines.append(HtmlcsEngine(
+                scan_level, verbose=verbose, quiet=quiet))
+        elif ename == 'alfa':
+            scan_engines.append(AlfaEngine(
+                scan_level, verbose=verbose, quiet=quiet))
     num_workers = _safe_int(config.get('workers', 1), 1)
     # Set up auth cookie header for any http_status() utility calls.
     global _http_cookie_header
@@ -928,21 +943,16 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         # start the next.
         import asyncio
 
-        run_opts = {}
-        if rules:
-            run_opts['runOnly'] = {'type': 'rule', 'values': rules}
-        elif tags:
-            run_opts['runOnly'] = {'type': 'tag', 'values': tags}
-
         async def _pw_sliding_window():
-            nonlocal page_count, total_page_time, use_alfa, use_ibm, use_htmlcs
+            nonlocal page_count, total_page_time
             from playwright.async_api import async_playwright
             async with async_playwright() as pw:
                 launch_args = [
                     '--disable-dev-shm-usage', '--disable-gpu']
-                if use_alfa:
-                    launch_args.append(
-                        '--remote-debugging-port=9222')
+                for eng in scan_engines:
+                    for arg in eng.browser_launch_args():
+                        if arg not in launch_args:
+                            launch_args.append(arg)
                 chromium_path = config.get('chromium_path')
                 ignore_certs = config.get(
                     'ignore_certificate_errors') in (
@@ -1074,68 +1084,15 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             print("  Login script not found: {}".format(
                                 script_path))
 
-                # Start Alfa subprocess if needed
-                _alfa_proc = None
-                _alfa_lock = asyncio.Lock()
-                if use_alfa:
-                    import urllib.request as _urlreq
+                # Start all engines (loads JS sources, starts subprocesses)
+                for eng in scan_engines:
                     try:
-                        _cdp_info = json.loads(_urlreq.urlopen(
-                            'http://127.0.0.1:9222/json/version',
-                            timeout=5).read())
-                        _cdp_ws = _cdp_info['webSocketDebuggerUrl']
+                        await eng.start(browser)
                     except Exception as e:
                         if not quiet:
-                            print("  Alfa: CDP not available"
-                                  " — {}".format(e))
-                        use_alfa = False
-
-                if use_alfa:
-                    _node_path = os.path.join(
-                        os.path.expanduser('~/local/bin'), 'node')
-                    if not os.path.isfile(_node_path):
-                        _node_path = 'node'
-                    _alfa_script = os.path.join(
-                        SCRIPT_DIR, 'alfa-engine.mjs')
-                    _env = os.environ.copy()
-                    _env['PATH'] = (
-                        os.path.expanduser('~/local/bin')
-                        + ':' + _env.get('PATH', ''))
-                    _alfa_proc = await asyncio.create_subprocess_exec(
-                        _node_path, _alfa_script,
-                        stdin=asyncio.subprocess.PIPE,
-                        stdout=asyncio.subprocess.PIPE,
-                        cwd=SCRIPT_DIR, env=_env)
-                    # Send init with CDP endpoint and level
-                    _alfa_level = 'aa'
-                    if level and 'aaa' in level:
-                        _alfa_level = 'aaa'
-                    elif level and 'a' in level and 'aa' not in level:
-                        _alfa_level = 'a'
-                    init_msg = json.dumps({
-                        'cdp': _cdp_ws,
-                        'level': _alfa_level}) + '\n'
-                    _alfa_proc.stdin.write(init_msg.encode())
-                    await _alfa_proc.stdin.drain()
-                    ready_line = await _alfa_proc.stdout.readline()
-                    ready = json.loads(ready_line)
-                    if not quiet:
-                        print("  Alfa: {} rules at level {}".format(
-                            ready.get('rules', '?'),
-                            ready.get('level', '?')))
-
-                async def _run_alfa(page_url):
-                    """Send a page to Alfa for scanning, return results."""
-                    if not _alfa_proc or _alfa_proc.returncode is not None:
-                        return None
-                    async with _alfa_lock:
-                        msg = json.dumps({'pageId': page_url}) + '\n'
-                        _alfa_proc.stdin.write(msg.encode())
-                        await _alfa_proc.stdin.drain()
-                        line = await asyncio.wait_for(
-                            _alfa_proc.stdout.readline(),
-                            timeout=120)
-                        return json.loads(line)
+                            print("  Engine start failed ({}): {}".format(
+                                type(eng).__name__, e))
+                        scan_engines.remove(eng)
 
                 async def _scan(url, worker_id=0,
                                 skip_rate_limit=False):
@@ -1241,279 +1198,67 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             _vskip(url, "not HTML")
                             return None
 
-                        # Run engines
-                        results = {'violations': [],
-                                   'incomplete': [],
-                                   'passes': [],
-                                   'inapplicable': []}
+                        # Run all engines on this page
+                        results = {
+                            EARL_FAILED: [],
+                            EARL_CANTTELL: [],
+                            EARL_PASSED: [],
+                            EARL_INAPPLICABLE: []}
 
-                        # axe-core engine
-                        if use_axe and axe_source:
-                            await page.add_script_tag(
-                                content=axe_source)
-                            axe_results = await page.evaluate(
-                                """(opts) => {
-                                    return axe.run(document, opts)
-                                        .catch(e => (
-                                            {error: e.toString()}));
-                                }""", run_opts)
-                            if axe_results and 'error' not in axe_results:
-                                results['violations'].extend(
-                                    axe_results.get('violations', []))
-                                results['incomplete'].extend(
-                                    axe_results.get('incomplete', []))
-                                results['passes'].extend(
-                                    axe_results.get('passes', []))
-                                results['inapplicable'].extend(
-                                    axe_results.get('inapplicable', []))
-                            elif use_axe and not use_alfa:
-                                err = (axe_results or {}).get(
-                                    'error', 'unknown error')
-                                _vskip(url, "axe error: {}".format(err))
-                                return None
+                        for eng in scan_engines:
+                            items = await eng.scan(page)
+                            for item in items:
+                                outcome = item.get('outcome', '')
+                                if outcome in results:
+                                    results[outcome].append(item)
 
-                        # IBM Equal Access engine (browser injection)
-                        if use_ibm and ace_source:
-                            try:
-                                await page.add_script_tag(
-                                    content=ace_source)
-                                # Map level to IBM ruleset
-                                if '22' in scan_level:
-                                    ibm_ruleset = 'WCAG_2_2'
-                                elif '20' in scan_level:
-                                    ibm_ruleset = 'WCAG_2_0'
-                                else:
-                                    ibm_ruleset = 'WCAG_2_1'
-                                ibm_results = await page.evaluate(
-                                    """(rs) => {
-                                        return new ace.Checker()
-                                            .check(document, [rs]);
-                                    }""", ibm_ruleset)
-                                # include_best set at top of
-                                # crawl_and_scan from --level
-                                for r in ibm_results.get(
-                                        'results', []):
-                                    cat = r.get('value', ['', ''])[0]
-                                    outcome = r.get(
-                                        'value', ['', ''])[1]
-                                    # VIOLATION/FAIL = WCAG failure
-                                    # RECOMMENDATION/FAIL = best practice
-                                    is_wcag = (cat == 'VIOLATION')
-                                    _ibm_tags = ibm_rule_to_tags(
-                                        r['ruleId'])
-                                    if not is_wcag:
-                                        _ibm_tags.append(
-                                            'best-practice')
-                                    if outcome == 'FAIL' and (
-                                            is_wcag or include_best):
-                                        results['violations'].append({
-                                            'id': r['ruleId'],
-                                            'engine': 'ibm',
-                                            'description':
-                                                r.get('message', ''),
-                                            'help':
-                                                r.get('message', ''),
-                                            'helpUrl': '',
-                                            'impact': 'serious'
-                                                if is_wcag
-                                                else 'minor',
-                                            'tags': _ibm_tags,
-                                            'nodes': [{
-                                                'target': [
-                                                    r.get('path', {})
-                                                    .get('dom', '')],
-                                                'html': r.get(
-                                                    'path', {})
-                                                    .get('dom', ''),
-                                                'any': [{
-                                                    'message':
-                                                        r.get(
-                                                            'message',
-                                                            '')}],
-                                            }],
-                                        })
-                                    elif outcome == 'POTENTIAL':
-                                        results['incomplete'].append({
-                                            'id': r['ruleId'],
-                                            'engine': 'ibm',
-                                            'help':
-                                                r.get('message', ''),
-                                            'helpUrl': '',
-                                            'impact': 'moderate',
-                                            'tags': _ibm_tags,
-                                            'nodes': [{
-                                                'target': [
-                                                    r.get('path', {})
-                                                    .get('dom', '')],
-                                                'html': r.get(
-                                                    'path', {})
-                                                    .get('dom', ''),
-                                                'any': [{
-                                                    'message':
-                                                        r.get(
-                                                            'message',
-                                                            '')}],
-                                            }],
-                                        })
-                            except Exception as e:
-                                if verbose and not quiet:
-                                    print("  ibm error: {}".format(e))
-
-                        # HTML_CodeSniffer engine (browser injection)
-                        if use_htmlcs and htmlcs_source:
-                            try:
-                                await page.add_script_tag(
-                                    content=htmlcs_source)
-                                if 'aaa' in scan_level:
-                                    htmlcs_std = 'WCAG2AAA'
-                                elif ('2a' in scan_level
-                                      and 'aa' not in scan_level):
-                                    htmlcs_std = 'WCAG2A'
-                                htmlcs_results = await page.evaluate(
-                                    """(std) => {
-                                        return new Promise(r => {
-                                            HTMLCS.process(
-                                                std, document, () => {
-                                                r(HTMLCS.getMessages()
-                                                    .map(m => ({
-                                                    type: m.type,
-                                                    code: m.code || '',
-                                                    msg: m.msg || '',
-                                                    path: m.element
-                                                        && m.element
-                                                            .outerHTML
-                                                        ? m.element
-                                                            .outerHTML
-                                                            .substring(
-                                                                0, 120)
-                                                        : ''
-                                                })));
-                                            });
-                                        });
-                                    }""", htmlcs_std)
-                                for r in htmlcs_results:
-                                    t = r.get('type', 0)
-                                    code = r.get('code', '')
-                                    _hsc = _htmlcs_code_to_sc(code)
-                                    _htags = _sc_to_wcag_tags(_hsc) if _hsc else []
-                                    # 1=ERROR → violation
-                                    # 2=WARNING → incomplete
-                                    if t == 1:
-                                        results['violations'].append({
-                                            'id': r['code'].split(
-                                                '.')[-1],
-                                            'engine': 'htmlcs',
-                                            'description':
-                                                r.get('msg', ''),
-                                            'help':
-                                                r.get('msg', ''),
-                                            'helpUrl': '',
-                                            'impact': 'serious',
-                                            'tags': _htags,
-                                            'nodes': [{
-                                                'target': [
-                                                    r.get('code', '')],
-                                                'html':
-                                                    r.get('path', ''),
-                                                'any': [{
-                                                    'message':
-                                                        r.get('msg',
-                                                              '')}],
-                                            }],
-                                        })
-                                    elif t == 2:
-                                        results['incomplete'].append({
-                                            'id': r['code'].split(
-                                                '.')[-1],
-                                            'engine': 'htmlcs',
-                                            'help':
-                                                r.get('msg', ''),
-                                            'helpUrl': '',
-                                            'impact': 'moderate',
-                                            'tags': _htags,
-                                            'nodes': [{
-                                                'target': [
-                                                    r.get('code', '')],
-                                                'html':
-                                                    r.get('path', ''),
-                                                'any': [{
-                                                    'message':
-                                                        r.get('msg',
-                                                              '')}],
-                                            }],
-                                        })
-                            except Exception as e:
-                                if verbose and not quiet:
-                                    print("  htmlcs error: {}"
-                                          .format(e))
-
-                        # Alfa engine (via CDP subprocess)
-                        if use_alfa and _alfa_proc:
-                            try:
-                                alfa_result = await _run_alfa(
-                                    page.url)
-                                if (alfa_result
-                                        and alfa_result.get('ok')):
-                                    # Convert Alfa results to
-                                    # axe-compatible format
-                                    for v in alfa_result.get(
-                                            'violations', []):
-                                        results['violations'].append({
-                                            'id': v['rule'],
-                                            'engine': 'alfa',
-                                            'description': v.get(
-                                                'message', ''),
-                                            'help': v.get(
-                                                'message', ''),
-                                            'helpUrl': v.get(
-                                                'uri', ''),
-                                            'impact': 'serious',
-                                            'tags': [
-                                                'wcag' + sc.replace(
-                                                    '.', '')
-                                                for sc in v.get(
-                                                    'wcag', [])],
-                                            'nodes': [{
-                                                'target': [v.get(
-                                                    'target', '')],
-                                                'html': v.get(
-                                                    'html', ''),
-                                                'any': [{
-                                                    'message': v.get(
-                                                        'message',
-                                                        '')}],
-                                            }],
-                                        })
-                                    for i in alfa_result.get(
-                                            'incomplete', []):
-                                        results['incomplete'].append({
-                                            'id': i['rule'],
-                                            'engine': 'alfa',
-                                            'help': i.get(
-                                                'message', ''),
-                                            'helpUrl': i.get(
-                                                'uri', ''),
-                                            'impact': 'moderate',
-                                            'nodes': [{
-                                                'target': [i.get(
-                                                    'target', '')],
-                                                'html': i.get(
-                                                    'html', ''),
-                                                'any': [{
-                                                    'message': i.get(
-                                                        'message',
-                                                        '')}],
-                                            }],
-                                        })
-                            except Exception as e:
-                                if verbose and not quiet:
-                                    print("  alfa error: {}".format(e))
-
-                        if (not results['violations']
-                                and not results['incomplete']
-                                and not results['passes']):
+                        if (not results[EARL_FAILED]
+                                and not results[EARL_CANTTELL]
+                                and not results[EARL_PASSED]):
                             _vskip(url, "no engine results")
                             return None
+
+                        # Resolve element references to uniform
+                        # CSS selectors while the page is still open.
+                        _node_refs = []
+                        _node_map = []  # (result_item, node_index)
+                        for outcome_list in results.values():
+                            for item in outcome_list:
+                                eng = item.get('engine', '')
+                                for ni, node in enumerate(
+                                        item.get('nodes', [])):
+                                    target = (
+                                        node.get('target', [''])[0]
+                                        if node.get('target')
+                                        else '')
+                                    ref = {}
+                                    if eng == 'ibm' and target.startswith('/'):
+                                        ref['xpath'] = target
+                                    elif target:
+                                        ref['css'] = target
+                                    if ref:
+                                        _node_map.append(
+                                            (item, ni))
+                                        _node_refs.append(ref)
+
+                        if _node_refs:
+                            try:
+                                _resolved = await page.evaluate(
+                                    _ELEMENT_RESOLVER_JS,
+                                    _node_refs)
+                                for idx, res in enumerate(
+                                        _resolved):
+                                    if res:
+                                        item, ni = _node_map[idx]
+                                        nodes = item.get(
+                                            'nodes', [])
+                                        if ni < len(nodes):
+                                            nodes[ni]['target'] = [
+                                                res['selector']]
+                                            nodes[ni]['html'] = (
+                                                res['html'])
+                            except Exception:
+                                pass  # keep original targets
 
                         # Log non-200 status (page is still scanned)
                         if (verbose and not quiet
@@ -1541,14 +1286,14 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                 datetime.now().isoformat(),
                             'http_status': (
                                 status if status != 0 else None),
-                            'violations':
-                                results['violations'],
-                            'incomplete':
-                                results['incomplete'],
-                            'passes':
-                                results['passes'],
-                            'inapplicable':
-                                results['inapplicable'],
+                            EARL_FAILED:
+                                results[EARL_FAILED],
+                            EARL_CANTTELL:
+                                results[EARL_CANTTELL],
+                            EARL_PASSED:
+                                results[EARL_PASSED],
+                            EARL_INAPPLICABLE:
+                                results[EARL_INAPPLICABLE],
                         }, new_links, worker_id, elapsed)
                     except Exception:
                         return None
@@ -1650,19 +1395,19 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                             url, page_data, new_links, _, elapsed = result
                             total_page_time += elapsed
                             v_count = _count_nodes(
-                                page_data.get('violations', []))
+                                page_data.get(EARL_FAILED, []))
                             i_count = _count_nodes(
-                                page_data.get('incomplete', []))
+                                page_data.get(EARL_CANTTELL, []))
                             if not quiet:
                                 pw_w = len(str(max_pages))
                                 parts = []
                                 if v_count:
                                     parts.append(
-                                        '{} violations'.format(
+                                        '{} failed'.format(
                                             v_count))
                                 if i_count:
                                     parts.append(
-                                        '{} incomplete'.format(
+                                        '{} cantTell'.format(
                                             i_count))
                                 ss = (', '.join(parts)
                                       if parts else 'clean')
@@ -1674,9 +1419,9 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                     print(
                                         "  V: {} ({} nodes), I: {} ({} nodes),"
                                         " Queue: {}".format(
-                                            len(page_data.get('violations', [])),
+                                            len(page_data.get(EARL_FAILED, [])),
                                             v_count,
-                                            len(page_data.get('incomplete', [])),
+                                            len(page_data.get(EARL_CANTTELL, [])),
                                             i_count, len(queue)))
                             _write_page(url, page_data)
 
@@ -1818,10 +1563,15 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                             queue.append(lnk)
                                 else:
                                     page_count -= 1
-                        # Restart
+                        # Restart — stop engines, close browser, relaunch
                         if not quiet:
                             print("  [restarting browser after"
                                   " {} pages]".format(page_count))
+                        for eng in scan_engines:
+                            try:
+                                await eng.stop()
+                            except Exception:
+                                pass
                         try:
                             await browser.close()
                         except Exception:
@@ -1855,6 +1605,16 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                 print("  [re-login failed"
                                       " after restart]")
 
+                        # Restart all engines with new browser
+                        for eng in scan_engines:
+                            try:
+                                await eng.start(browser)
+                            except Exception as e:
+                                if not quiet:
+                                    print("  Engine restart failed"
+                                          " ({}): {}".format(
+                                              type(eng).__name__, e))
+
                         # Refill the sliding window after restart
                         for i in range(num_workers):
                             if page_count + len(pending) >= max_pages:
@@ -1880,20 +1640,12 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                     except (asyncio.CancelledError, Exception):
                         pass
 
-                # Shut down Alfa subprocess
-                if _alfa_proc and _alfa_proc.returncode is None:
+                # Shut down all engines
+                for eng in scan_engines:
                     try:
-                        _alfa_proc.stdin.write(
-                            json.dumps({'quit': True}).encode()
-                            + b'\n')
-                        await _alfa_proc.stdin.drain()
-                        await asyncio.wait_for(
-                            _alfa_proc.wait(), timeout=10)
+                        await eng.stop()
                     except Exception:
-                        try:
-                            _alfa_proc.kill()
-                        except Exception:
-                            pass
+                        pass
 
                 try:
                     await browser.close()
@@ -1959,8 +1711,8 @@ def _iter_report(path):
     yield from _iter_jsonl(path)
 
 
-def _extract_urls_from_report(path, which='violations'):
-    """Extract URLs with violations or incompletes from a report file."""
+def _extract_urls_from_report(path, which=EARL_FAILED):
+    """Extract URLs with failures or cantTell results from a report file."""
     urls = []
     for url, data in _iter_report(path):
         if data.get(which):
@@ -1981,7 +1733,7 @@ def _group_results(jsonl_path, group_by, allowlist=None):
     group_examples = {}
 
     for url, data in _iter_jsonl(jsonl_path):
-        for category in ('violations', 'incomplete'):
+        for category in (EARL_FAILED, EARL_CANTTELL):
             for item in data.get(category, []):
                 rule_id = item.get('id', 'unknown')
                 tags = item.get('tags', [])
@@ -2053,6 +1805,16 @@ def _group_results(jsonl_path, group_by, allowlist=None):
                     elif group_by == 'engine':
                         # Get engine from item if available
                         key = item.get('engine', 'axe')
+                    elif group_by == 'bp':
+                        bp_tags = [t[3:] for t in tags
+                                   if t.startswith('bp-')]
+                        if bp_tags:
+                            key = bp_tags[0]
+                        elif 'best-practice' in tags:
+                            key = '(uncategorized)'
+                        else:
+                            scs = _parse_wcag_sc(tags)
+                            key = 'WCAG ' + ', '.join(scs) if scs else rule_id
                     else:
                         key = rule_id
 
@@ -2104,12 +1866,12 @@ def generate_html_report(jsonl_path, output_path, start_url,
     def _track_wcag(tags, category, count=1):
         for sc in _parse_wcag_sc(tags):
             if sc not in wcag_criteria:
-                wcag_criteria[sc] = {'violations': 0, 'incomplete': 0, 'passes': 0}
+                wcag_criteria[sc] = {EARL_FAILED: 0, EARL_CANTTELL: 0, EARL_PASSED: 0}
             wcag_criteria[sc][category] += count
 
     for url, data in _iter_jsonl(jsonl_path):
         total_pages += 1
-        for v in data.get('violations', []):
+        for v in data.get(EARL_FAILED, []):
             nodes = v.get('nodes', [])
             total_violations += 1
             total_violation_nodes += len(nodes)
@@ -2129,9 +1891,9 @@ def generate_html_report(jsonl_path, output_path, start_url,
                 }
             rule_summary[rule_id]['count'] += len(nodes)
             rule_summary[rule_id]['pages'].append(url)
-            _track_wcag(v.get('tags', []), 'violations', len(nodes))
+            _track_wcag(v.get('tags', []), EARL_FAILED, len(nodes))
 
-        for v in data.get('incomplete', []):
+        for v in data.get(EARL_CANTTELL, []):
             nodes = v.get('nodes', [])
             rule_id = v.get('id', 'unknown')
             if _matches_allowlist(rule_id, url, nodes, allowlist):
@@ -2148,10 +1910,10 @@ def generate_html_report(jsonl_path, output_path, start_url,
                 }
             incomplete_summary[rule_id]['count'] += len(nodes)
             incomplete_summary[rule_id]['pages'].append(url)
-            _track_wcag(v.get('tags', []), 'incomplete', len(nodes))
+            _track_wcag(v.get('tags', []), EARL_CANTTELL, len(nodes))
 
-        for v in data.get('passes', []):
-            _track_wcag(v.get('tags', []), 'passes')
+        for v in data.get(EARL_PASSED, []):
+            _track_wcag(v.get('tags', []), EARL_PASSED)
 
     sorted_rules = sorted(rule_summary.items(), key=lambda x: x[1]['count'], reverse=True)
     sorted_incomplete = sorted(incomplete_summary.items(), key=lambda x: x[1]['count'], reverse=True)
@@ -2266,10 +2028,10 @@ def generate_html_report(jsonl_path, output_path, start_url,
                           '<th style="color:#2e7d32">Passes</th>'
                           '<th>Status</th></tr>')
         for sc, counts in sorted_sc:
-            name = WCAG_SC_NAMES.get(sc, '')
-            v = counts['violations']
-            i = counts['incomplete']
-            p = counts['passes']
+            name = sc_name(sc)
+            v = counts[EARL_FAILED]
+            i = counts[EARL_CANTTELL]
+            p = counts[EARL_PASSED]
             if v > 0:
                 status = '<span class="badge badge-critical">FAIL</span>'
             elif i > 0:
@@ -2322,8 +2084,8 @@ def generate_html_report(jsonl_path, output_path, start_url,
     html_parts.append('<h2>Per-Page Details</h2>')
     clean_pages = []
     for url, data in _iter_jsonl(jsonl_path):
-        violations = data.get('violations', [])
-        incomplete = data.get('incomplete', [])
+        violations = data.get(EARL_FAILED, [])
+        incomplete = data.get(EARL_CANTTELL, [])
         # Filter out allowlisted incompletes
         shown_incomplete = []
         for v in incomplete:
@@ -2455,7 +2217,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
         total_pages += 1
         path = urlparse(url).path
 
-        for v in data.get('violations', []):
+        for v in data.get(EARL_FAILED, []):
             rule_id = v.get('id', 'unknown')
             nodes = v.get('nodes', [])
             pages_with_violations.add(path)
@@ -2479,7 +2241,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
                 if snippet and len(info['examples']) < 3 and snippet not in info['examples']:
                     info['examples'].append(snippet)
 
-        for v in data.get('incomplete', []):
+        for v in data.get(EARL_CANTTELL, []):
             nodes = v.get('nodes', [])
             rule_id = v.get('id', 'unknown')
             if _matches_allowlist(rule_id, url, nodes, allowlist):
@@ -2603,7 +2365,7 @@ def diff_scans(old_jsonl, new_jsonl, allowlist=None):
         keys = {}
         for url, data in _iter_jsonl(jsonl_path):
             path = urlparse(url).path
-            for v in data.get('violations', []):
+            for v in data.get(EARL_FAILED, []):
                 key = (path, v.get('id', ''))
                 keys[key] = keys.get(key, 0) + len(v.get('nodes', []))
         return keys
@@ -2697,7 +2459,7 @@ def main():
                         help='Extract and re-scan only pages with incompletes from a previous JSON or JSONL report')
     parser.add_argument('--group-by', default=None,
                         choices=['rule', 'selector', 'color', 'reason',
-                                 'wcag', 'level', 'engine'],
+                                 'wcag', 'level', 'engine', 'bp'],
                         help='After scanning, print a grouped summary. '
                              'rule: by axe rule ID. selector: by CSS selector pattern. '
                              'color: by foreground/background color pair. '
@@ -2862,26 +2624,26 @@ OTHER NOTES
             parser.error('Rescan file not found: {}'.format(args.rescan))
         seed_urls = []
         for prev_url, prev_data in _iter_jsonl(args.rescan):
-            if prev_data.get('violations') or prev_data.get('incomplete'):
+            if prev_data.get(EARL_FAILED) or prev_data.get(EARL_CANTTELL):
                 seed_urls.append(prev_url)
         if not seed_urls:
             print("No failures in previous scan — nothing to rescan.")
             sys.exit(0)
-        print("Rescanning {} pages with previous violations/incompletes".format(len(seed_urls)))
+        print("Rescanning {} pages with previous failures".format(len(seed_urls)))
     if args.violations_from:
         if not os.path.exists(args.violations_from):
             parser.error('Report not found: {}'.format(args.violations_from))
-        seed_urls = _extract_urls_from_report(args.violations_from, 'violations')
+        seed_urls = _extract_urls_from_report(args.violations_from, EARL_FAILED)
         if not seed_urls:
-            print("No violations in previous report — nothing to rescan.")
+            print("No failures in previous report — nothing to rescan.")
             sys.exit(0)
-        print("Rescanning {} pages with previous violations".format(len(seed_urls)))
+        print("Rescanning {} pages with previous failures".format(len(seed_urls)))
         if not url:
             url = seed_urls[0]
     if args.incompletes_from:
         if not os.path.exists(args.incompletes_from):
             parser.error('Report not found: {}'.format(args.incompletes_from))
-        seed_urls = _extract_urls_from_report(args.incompletes_from, 'incomplete')
+        seed_urls = _extract_urls_from_report(args.incompletes_from, EARL_CANTTELL)
         if not seed_urls:
             print("No incompletes in previous report — nothing to rescan.")
             sys.exit(0)
@@ -3053,22 +2815,22 @@ OTHER NOTES
     violation_rules = set()
     if jsonl_path and os.path.exists(jsonl_path):
         for _, data in _iter_jsonl(jsonl_path):
-            total_violations += _count_nodes(data.get('violations', []))
-            total_incomplete += _count_nodes(data.get('incomplete', []))
-            for v in data.get('violations', []):
+            total_violations += _count_nodes(data.get(EARL_FAILED, []))
+            total_incomplete += _count_nodes(data.get(EARL_CANTTELL, []))
+            for v in data.get(EARL_FAILED, []):
                 violation_rules.add(v.get('id', ''))
 
     throughput = (wall_time / scanned) if scanned else 0
     print("\nScan complete: {} pages in {:.1f}s ({:.1f}s/page)".format(
         scanned, wall_time, throughput))
-    print("  Violations: {} node(s) failing WCAG rules".format(total_violations))
-    print("  Incomplete: {} node(s) needing manual review".format(total_incomplete))
+    print("  Failed: {} node(s) failing WCAG rules".format(total_violations))
+    print("  Can't tell: {} node(s) needing manual review".format(total_incomplete))
 
     if args.summary_json:
         summary = {
             'pages': scanned,
-            'violations': total_violations,
-            'incomplete': total_incomplete,
+            EARL_FAILED: total_violations,
+            EARL_CANTTELL: total_incomplete,
             'rules': sorted(violation_rules),
             'clean': total_violations == 0,
         }
