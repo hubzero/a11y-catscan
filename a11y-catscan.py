@@ -162,22 +162,59 @@ def load_allowlist(path):
     return entries
 
 
-def _matches_allowlist(rule_id, url, nodes, allowlist):
+def _matches_allowlist(rule_id, url, nodes, allowlist,
+                       engines_dict=None, outcome=None):
     """Check if a result matches any allowlist entry.
+
+    Allowlist entries use normalized tags (sc-*, aria-*, bp-*) in the
+    rule field.  All specified filters are AND — a finding must match
+    all of them to be suppressed.
+
+    Args:
+        rule_id: Normalized finding ID (e.g. 'sc-2.4.7', 'bp-landmarks')
+        url: Page URL
+        nodes: List of node dicts
+        allowlist: List of allowlist entry dicts
+        engines_dict: Engines attribution dict from deduped findings
+                      e.g. {'ibm': {'rule': '...'}, 'axe': {...}}
+        outcome: EARL outcome ('failed', 'cantTell')
 
     Returns True if the result should be suppressed.
     """
+    # Engine names that contributed to this finding
+    finding_engines = set(engines_dict.keys()) if engines_dict else set()
+
     for entry in allowlist:
-        # Rule must match
+        # Rule must match the normalized ID
         if entry.get('rule') != rule_id:
             continue
 
-        # If entry has a URL filter, it must appear in the page URL
+        # Engine filter: only suppress when the finding came from
+        # this specific engine.  A finding confirmed by both axe
+        # and IBM with engine:'ibm' only suppresses if IBM is the
+        # SOLE engine.  Multi-engine findings aren't suppressed
+        # by single-engine allowlist entries.
+        entry_engine = entry.get('engine', '')
+        if entry_engine:
+            if entry_engine not in finding_engines:
+                continue
+            # Don't suppress multi-engine findings with a
+            # single-engine filter — if axe also found it,
+            # it's a real issue regardless of IBM noise
+            if len(finding_engines) > 1:
+                continue
+
+        # Outcome filter
+        entry_outcome = entry.get('outcome', '')
+        if entry_outcome and entry_outcome != outcome:
+            continue
+
+        # URL filter
         entry_url = entry.get('url', '')
         if entry_url and entry_url not in url:
             continue
 
-        # If entry has a target filter, at least one node must match
+        # Target filter
         entry_target = entry.get('target', '')
         if entry_target:
             target_found = False
@@ -1433,7 +1470,9 @@ def generate_html_report(jsonl_path, output_path, start_url,
         for v in data.get(EARL_CANTTELL, []):
             nodes = v.get('nodes', [])
             rule_id = v.get('id', 'unknown')
-            if _matches_allowlist(rule_id, url, nodes, allowlist):
+            if _matches_allowlist(rule_id, url, nodes, allowlist,
+                                  engines_dict=v.get('engines'),
+                                  outcome=EARL_CANTTELL):
                 total_suppressed += len(nodes)
                 continue
             total_incomplete_nodes += len(nodes)
@@ -1628,7 +1667,9 @@ def generate_html_report(jsonl_path, output_path, start_url,
         for v in incomplete:
             rule_id = v.get('id', '')
             nodes = v.get('nodes', [])
-            if not _matches_allowlist(rule_id, url, nodes, allowlist):
+            if not _matches_allowlist(rule_id, url, nodes, allowlist,
+                                        engines_dict=v.get('engines'),
+                                        outcome=EARL_CANTTELL):
                 shown_incomplete.append(v)
         if not violations and not shown_incomplete:
             clean_pages.append(url)
@@ -1781,7 +1822,9 @@ def generate_llm_report(jsonl_path, output_path, start_url,
         for v in data.get(EARL_CANTTELL, []):
             nodes = v.get('nodes', [])
             rule_id = v.get('id', 'unknown')
-            if _matches_allowlist(rule_id, url, nodes, allowlist):
+            if _matches_allowlist(rule_id, url, nodes, allowlist,
+                                  engines_dict=v.get('engines'),
+                                  outcome=EARL_CANTTELL):
                 suppressed_count += len(nodes)
                 continue
             pages_with_incompletes.add(path)
@@ -2498,8 +2541,14 @@ OTHER NOTES
     total_incomplete = 0
     violation_rules = set()
     if jsonl_path and os.path.exists(jsonl_path):
-        for _, data in _iter_deduped(jsonl_path):
+        for page_url, data in _iter_deduped(jsonl_path):
             for v in data.get(EARL_FAILED, []):
+                if allowlist and _matches_allowlist(
+                        v.get('id', ''), page_url,
+                        v.get('nodes', []), allowlist,
+                        engines_dict=v.get('engines'),
+                        outcome=EARL_FAILED):
+                    continue
                 tags = v.get('tags', [])
                 has_wcag = any(t.startswith('sc-') for t in tags)
                 has_aria = any(t.startswith('aria-') for t in tags)
@@ -2519,8 +2568,14 @@ OTHER NOTES
                     total_bp_failed += nodes
                 else:
                     total_bp_failed += nodes
-            total_incomplete += _count_nodes(
-                data.get(EARL_CANTTELL, []))
+            for v in data.get(EARL_CANTTELL, []):
+                if allowlist and _matches_allowlist(
+                        v.get('id', ''), page_url,
+                        v.get('nodes', []), allowlist,
+                        engines_dict=v.get('engines'),
+                        outcome=EARL_CANTTELL):
+                    continue
+                total_incomplete += _count_nodes([v])
 
     # Compliance count: WCAG only, unless --level best
     compliance_failed = total_wcag_failed
