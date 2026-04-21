@@ -6,11 +6,18 @@
  *
  * Protocol:
  *   Init:   {"cdp": "ws://...", "level": "aa"}
- *   Scan:   {"pageId": "TARGET_ID"}
+ *   Scan:   {"pageId": "URL", "targetId": "CDP_TARGET_ID"}
  *   Quit:   {"quit": true}
  *
  *   Ready:  {"ok": true, "ready": true, "rules": N, "level": "aa"}
  *   Result: {"ok": true, "pageId": "...", "violations": [...], "incomplete": [...], "passes": N}
+ *
+ * Page discovery:
+ *   Playwright manages pages via its internal pipe transport, not CDP.
+ *   The CDP /json/list endpoint doesn't see Playwright-managed pages.
+ *   Instead, Python sends the targetId (from Target.getTargetInfo) and
+ *   we use browser.contexts() to find it, or create a CDP session to
+ *   attach to it directly.
  */
 
 import { Playwright } from "@siteimprove/alfa-playwright";
@@ -123,40 +130,73 @@ async function init(cdpUrl, level) {
   browser = await chromium.connectOverCDP(cdpUrl);
 }
 
-async function scanPage(pageId) {
-  // Find the page by its CDP target ID across all contexts
+async function findPage(pageId, targetId) {
+  // Strategy 1: search all contexts by URL (works if CDP exposes pages)
   for (const ctx of browser.contexts()) {
     for (const page of ctx.pages()) {
-      // Match by target ID from CDP
-      const targetId =
-        page._impl_obj?._initializer?.guid ||
-        page.url(); // fallback to URL match
-      // The Python side sends us the page URL since target IDs
-      // are hard to extract consistently across bindings
-      if (page.url() === pageId || targetId === pageId) {
-        const alfaPage = await Playwright.toPage(page);
-        const outcomes = await Audit.of(alfaPage, filteredRules).evaluate();
-
-        const violations = [];
-        const incomplete = [];
-        let passes = 0;
-
-        for (const outcome of outcomes) {
-          const j = outcome.toJSON();
-          if (j.outcome === "failed") {
-            violations.push(normalizeOutcome(j));
-          } else if (j.outcome === "cantTell") {
-            incomplete.push(normalizeOutcome(j));
-          } else if (j.outcome === "passed") {
-            passes++;
-          }
-        }
-
-        return { ok: true, pageId, violations, incomplete, passes };
+      if (page.url() === pageId) {
+        return page;
       }
     }
   }
-  return { ok: false, pageId, error: "Page not found in browser" };
+
+  // Strategy 2: use the CDP target ID to navigate to the page.
+  // When Playwright manages pages via pipe transport, connectOverCDP
+  // doesn't see them in contexts().  But we can create a new page via
+  // CDP that navigates to the same URL — Alfa will scan the fresh load.
+  // This is a fallback that costs one extra page load.
+  if (pageId) {
+    try {
+      const ctx = browser.contexts()[0] || await browser.newContext();
+      const page = await ctx.newPage();
+      await page.goto(pageId, { waitUntil: "networkidle", timeout: 60000 });
+      return page;
+    } catch (e) {
+      // If navigation fails, return null
+      return null;
+    }
+  }
+
+  return null;
+}
+
+async function scanPage(pageId, targetId) {
+  // Find or load the page
+  const page = await findPage(pageId, targetId);
+  if (!page) {
+    return { ok: false, pageId, error: "Page not found and could not be loaded" };
+  }
+
+  // Track whether we created the page (need to close it after)
+  const weCreatedPage = !browser.contexts().some(ctx =>
+    ctx.pages().some(p => p === page && p.url() === pageId));
+
+  try {
+    const alfaPage = await Playwright.toPage(page);
+    const outcomes = await Audit.of(alfaPage, filteredRules).evaluate();
+
+    const violations = [];
+    const incomplete = [];
+    let passes = 0;
+
+    for (const outcome of outcomes) {
+      const j = outcome.toJSON();
+      if (j.outcome === "failed") {
+        violations.push(normalizeOutcome(j));
+      } else if (j.outcome === "cantTell") {
+        incomplete.push(normalizeOutcome(j));
+      } else if (j.outcome === "passed") {
+        passes++;
+      }
+    }
+
+    return { ok: true, pageId, violations, incomplete, passes };
+  } finally {
+    // Close the page if we created it (fallback navigation)
+    if (weCreatedPage) {
+      try { await page.close(); } catch {}
+    }
+  }
 }
 
 // Main loop
@@ -188,7 +228,7 @@ for await (const line of rl) {
     }
 
     if (req.pageId) {
-      const result = await scanPage(req.pageId);
+      const result = await scanPage(req.pageId, req.targetId || null);
       process.stdout.write(JSON.stringify(result) + "\n");
     } else if (req.quit) {
       break;
