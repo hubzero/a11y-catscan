@@ -213,6 +213,79 @@ def _parse_wcag_sc(tags):
     return criteria
 
 
+# WCAG SC → conformance level and version introduced.
+# SCs added in 2.1 and 2.2 are marked; everything else is 2.0.
+_SC_META = {
+    # Perceivable
+    '1.1.1': ('A', '2.0'), '1.2.1': ('A', '2.0'), '1.2.2': ('A', '2.0'),
+    '1.2.3': ('A', '2.0'), '1.2.4': ('AA', '2.0'), '1.2.5': ('AA', '2.0'),
+    '1.2.6': ('AAA', '2.0'), '1.2.7': ('AAA', '2.0'), '1.2.8': ('AAA', '2.0'),
+    '1.2.9': ('AAA', '2.0'),
+    '1.3.1': ('A', '2.0'), '1.3.2': ('A', '2.0'), '1.3.3': ('A', '2.0'),
+    '1.3.4': ('AA', '2.1'), '1.3.5': ('AA', '2.1'), '1.3.6': ('AAA', '2.1'),
+    '1.4.1': ('A', '2.0'), '1.4.2': ('A', '2.0'), '1.4.3': ('AA', '2.0'),
+    '1.4.4': ('AA', '2.0'), '1.4.5': ('AA', '2.0'), '1.4.6': ('AAA', '2.0'),
+    '1.4.7': ('AAA', '2.0'), '1.4.8': ('AAA', '2.0'), '1.4.9': ('AAA', '2.0'),
+    '1.4.10': ('AA', '2.1'), '1.4.11': ('AA', '2.1'), '1.4.12': ('AA', '2.1'),
+    '1.4.13': ('AA', '2.1'),
+    # Operable
+    '2.1.1': ('A', '2.0'), '2.1.2': ('A', '2.0'), '2.1.3': ('AAA', '2.0'),
+    '2.1.4': ('A', '2.1'),
+    '2.2.1': ('A', '2.0'), '2.2.2': ('A', '2.0'), '2.2.3': ('AAA', '2.0'),
+    '2.2.4': ('AAA', '2.0'), '2.2.5': ('AAA', '2.0'), '2.2.6': ('AAA', '2.1'),
+    '2.3.1': ('A', '2.0'), '2.3.2': ('AAA', '2.0'), '2.3.3': ('AAA', '2.0'),
+    '2.4.1': ('A', '2.0'), '2.4.2': ('A', '2.0'), '2.4.3': ('A', '2.0'),
+    '2.4.4': ('A', '2.0'), '2.4.5': ('AA', '2.0'), '2.4.6': ('AA', '2.0'),
+    '2.4.7': ('AA', '2.0'), '2.4.8': ('AAA', '2.0'), '2.4.9': ('AAA', '2.0'),
+    '2.4.10': ('AAA', '2.0'),
+    '2.4.11': ('AA', '2.2'), '2.4.12': ('AAA', '2.2'), '2.4.13': ('AAA', '2.2'),
+    '2.5.1': ('A', '2.1'), '2.5.2': ('A', '2.1'), '2.5.3': ('A', '2.1'),
+    '2.5.4': ('A', '2.1'), '2.5.5': ('AAA', '2.1'), '2.5.6': ('AAA', '2.1'),
+    '2.5.7': ('AA', '2.2'), '2.5.8': ('AA', '2.2'),
+    # Understandable
+    '3.1.1': ('A', '2.0'), '3.1.2': ('AA', '2.0'), '3.1.3': ('AAA', '2.0'),
+    '3.1.4': ('AAA', '2.0'), '3.1.5': ('AAA', '2.0'), '3.1.6': ('AAA', '2.0'),
+    '3.2.1': ('A', '2.0'), '3.2.2': ('A', '2.0'), '3.2.3': ('AA', '2.0'),
+    '3.2.4': ('AA', '2.0'), '3.2.5': ('AAA', '2.0'), '3.2.6': ('A', '2.2'),
+    '3.3.1': ('A', '2.0'), '3.3.2': ('A', '2.0'), '3.3.3': ('AA', '2.0'),
+    '3.3.4': ('AA', '2.0'), '3.3.5': ('AAA', '2.0'), '3.3.6': ('AAA', '2.0'),
+    '3.3.7': ('A', '2.2'), '3.3.8': ('AA', '2.2'), '3.3.9': ('A', '2.2'),
+    # Robust
+    '4.1.1': ('A', '2.0'), '4.1.2': ('A', '2.0'), '4.1.3': ('AA', '2.1'),
+}
+
+
+def _sc_level(sc):
+    """Return (level, version) for a WCAG SC, e.g. ('AA', '2.1')."""
+    return _SC_META.get(sc, ('?', '?'))
+
+
+def _htmlcs_code_to_sc(code):
+    """Extract WCAG SC from HTMLCS code.
+
+    E.g. 'WCAG2AA.Principle1.Guideline1_4.1_4_3.G18' → '1.4.3'
+    """
+    m = re.search(r'(\d+)_(\d+)_(\d+)', code)
+    if m:
+        return '{}.{}.{}'.format(m.group(1), m.group(2), m.group(3))
+    return None
+
+
+def _sc_to_wcag_tags(sc):
+    """Convert a WCAG SC number to axe-style tags for grouping."""
+    if not sc:
+        return []
+    lvl, ver = _sc_level(sc)
+    tags = []
+    if ver == '2.0':
+        tags.append('wcag{}'.format(sc.replace('.', '')))
+    elif ver == '2.1':
+        tags.append('wcag{}'.format(sc.replace('.', '')))
+    elif ver == '2.2':
+        tags.append('wcag{}'.format(sc.replace('.', '')))
+    return tags
+
+
 def load_allowlist(path):
     """Load an allowlist file that suppresses known-acceptable incompletes.
 
@@ -1355,6 +1428,9 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                     }""", htmlcs_std)
                                 for r in htmlcs_results:
                                     t = r.get('type', 0)
+                                    code = r.get('code', '')
+                                    _hsc = _htmlcs_code_to_sc(code)
+                                    _htags = _sc_to_wcag_tags(_hsc) if _hsc else []
                                     # 1=ERROR → violation
                                     # 2=WARNING → incomplete
                                     if t == 1:
@@ -1368,7 +1444,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                                 r.get('msg', ''),
                                             'helpUrl': '',
                                             'impact': 'serious',
-                                            'tags': [],
+                                            'tags': _htags,
                                             'nodes': [{
                                                 'target': [
                                                     r.get('code', '')],
@@ -1389,6 +1465,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                                 r.get('msg', ''),
                                             'helpUrl': '',
                                             'impact': 'moderate',
+                                            'tags': _htags,
                                             'nodes': [{
                                                 'target': [
                                                     r.get('code', '')],
@@ -1427,7 +1504,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
                                                 'uri', ''),
                                             'impact': 'serious',
                                             'tags': [
-                                                'wcag2' + sc.replace(
+                                                'wcag' + sc.replace(
                                                     '.', '')
                                                 for sc in v.get(
                                                     'wcag', [])],
@@ -1999,6 +2076,18 @@ def _group_results(jsonl_path, group_by, allowlist=None):
                     elif group_by == 'wcag':
                         scs = _parse_wcag_sc(tags)
                         key = ', '.join(scs) if scs else rule_id
+                    elif group_by == 'level':
+                        scs = _parse_wcag_sc(tags)
+                        if scs:
+                            lvl, ver = _sc_level(next(iter(scs)))
+                            key = 'WCAG {} {}'.format(ver, lvl)
+                        elif 'best-practice' in tags:
+                            key = 'Best Practice'
+                        else:
+                            key = 'Unmapped'
+                    elif group_by == 'engine':
+                        # Get engine from item if available
+                        key = item.get('engine', 'axe')
                     else:
                         key = rule_id
 
@@ -2642,7 +2731,8 @@ def main():
     parser.add_argument('--incompletes-from', default=None, metavar='REPORT',
                         help='Extract and re-scan only pages with incompletes from a previous JSON or JSONL report')
     parser.add_argument('--group-by', default=None,
-                        choices=['rule', 'selector', 'color', 'reason', 'wcag'],
+                        choices=['rule', 'selector', 'color', 'reason',
+                                 'wcag', 'level', 'engine'],
                         help='After scanning, print a grouped summary. '
                              'rule: by axe rule ID. selector: by CSS selector pattern. '
                              'color: by foreground/background color pair. '
