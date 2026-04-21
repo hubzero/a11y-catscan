@@ -368,7 +368,12 @@ class AlfaEngine(Engine):
         return out
 
     async def stop(self):
-        """Shut down the Alfa Node.js subprocess."""
+        """Shut down the Alfa Node.js subprocess.
+
+        Explicitly closes stdin/stdout transports before the event
+        loop closes, preventing 'Event loop is closed' tracebacks
+        during garbage collection.
+        """
         if self._proc and self._proc.returncode is None:
             try:
                 self._proc.stdin.write(
@@ -379,6 +384,19 @@ class AlfaEngine(Engine):
             except Exception:
                 try:
                     self._proc.kill()
+                    await self._proc.wait()
                 except Exception:
                     pass
+        # Close the transport streams so asyncio doesn't try to
+        # clean them up after the event loop closes.
+        if self._proc:
+            try:
+                self._proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                if self._proc.stdout:
+                    self._proc.stdout.feed_eof()
+            except Exception:
+                pass
         self._proc = None
