@@ -2485,30 +2485,54 @@ OTHER NOTES
                             config=config)
         print("LLM report: {}".format(llm_path))
 
-    # Summary (single pass through JSONL)
-    total_violations = 0
+    # Summary (single pass through JSONL).
+    # Separate WCAG failures from best-practice/ARIA-only failures.
+    # The --level setting determines what counts as a compliance failure:
+    #   wcag*  → only wcag-* tagged failures count
+    #   best   → wcag-* AND bp-*/aria-* failures count
+    scan_level_used = args.level or config.get('level', DEFAULT_LEVEL)
+    include_bp_in_count = (scan_level_used == 'best')
+    total_wcag_failed = 0
+    total_bp_failed = 0
     total_incomplete = 0
     violation_rules = set()
     if jsonl_path and os.path.exists(jsonl_path):
         for _, data in _iter_deduped(jsonl_path):
-            total_violations += _count_nodes(data.get(EARL_FAILED, []))
-            total_incomplete += _count_nodes(data.get(EARL_CANTTELL, []))
             for v in data.get(EARL_FAILED, []):
-                violation_rules.add(v.get('id', ''))
+                tags = v.get('tags', [])
+                has_wcag = any(t.startswith('wcag-') for t in tags)
+                nodes = _count_nodes([v])
+                if has_wcag:
+                    total_wcag_failed += nodes
+                    violation_rules.add(v.get('id', ''))
+                else:
+                    total_bp_failed += nodes
+            total_incomplete += _count_nodes(
+                data.get(EARL_CANTTELL, []))
+
+    # Compliance count: WCAG only, unless --level best
+    compliance_failed = total_wcag_failed
+    if include_bp_in_count:
+        compliance_failed += total_bp_failed
 
     throughput = (wall_time / scanned) if scanned else 0
     print("\nScan complete: {} pages in {:.1f}s ({:.1f}s/page)".format(
         scanned, wall_time, throughput))
-    print("  Failed: {} node(s) failing WCAG rules".format(total_violations))
-    print("  Can't tell: {} node(s) needing manual review".format(total_incomplete))
+    print("  WCAG failed: {} node(s)".format(total_wcag_failed))
+    if total_bp_failed:
+        print("  Best practice: {} node(s)".format(total_bp_failed))
+    print("  Can't tell: {} node(s) needing manual review".format(
+        total_incomplete))
 
     if args.summary_json:
         summary = {
             'pages': scanned,
-            EARL_FAILED: total_violations,
+            EARL_FAILED: compliance_failed,
+            'wcag_failed': total_wcag_failed,
+            'bp_failed': total_bp_failed,
             EARL_CANTTELL: total_incomplete,
             'rules': sorted(violation_rules),
-            'clean': total_violations == 0,
+            'clean': compliance_failed == 0,
         }
         print(json.dumps(summary))
 
@@ -2527,9 +2551,9 @@ OTHER NOTES
             engines=config.get('engines', ['axe']),
             summary={
                 'pages': scanned,
-                EARL_FAILED: total_violations,
+                EARL_FAILED: compliance_failed,
                 EARL_CANTTELL: total_incomplete,
-                'clean': total_violations == 0,
+                'clean': compliance_failed == 0,
             })
 
     # Diff against previous scan
@@ -2545,7 +2569,7 @@ OTHER NOTES
         _group_results(jsonl_path, args.group_by, allowlist=allowlist)
 
     # Exit code: 0 = clean, 1 = violations found
-    if total_violations > 0:
+    if compliance_failed > 0:
         sys.exit(1)
 
 
