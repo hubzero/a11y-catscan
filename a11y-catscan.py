@@ -1873,7 +1873,7 @@ def _group_results(jsonl_path, group_by, allowlist=None):
     group_pages = {}
     group_examples = {}
 
-    for url, data in _iter_jsonl(jsonl_path):
+    for url, data in _iter_deduped(jsonl_path):
         for category in (EARL_FAILED, EARL_CANTTELL):
             for item in data.get(category, []):
                 rule_id = item.get('id', 'unknown')
@@ -1944,8 +1944,11 @@ def _group_results(jsonl_path, group_by, allowlist=None):
                         else:
                             key = 'Unmapped'
                     elif group_by == 'engine':
-                        # Get engine from item if available
-                        key = item.get('engine', 'axe')
+                        engines = item.get('engines', {})
+                        if engines:
+                            key = '+'.join(sorted(engines.keys()))
+                        else:
+                            key = item.get('engine', 'unknown')
                     elif group_by == 'bp':
                         bp_tags = [t[3:] for t in tags
                                    if t.startswith('bp-')]
@@ -2010,7 +2013,7 @@ def generate_html_report(jsonl_path, output_path, start_url,
                 wcag_criteria[sc] = {EARL_FAILED: 0, EARL_CANTTELL: 0, EARL_PASSED: 0}
             wcag_criteria[sc][category] += count
 
-    for url, data in _iter_jsonl(jsonl_path):
+    for url, data in _iter_deduped(jsonl_path):
         total_pages += 1
         for v in data.get(EARL_FAILED, []):
             nodes = v.get('nodes', [])
@@ -2221,10 +2224,10 @@ def generate_html_report(jsonl_path, output_path, start_url,
                     desc=_esc(info['help'])))
         html_parts.append('</table>')
 
-    # --- Pass 2: per-page details (stream from JSONL again) ---
+    # --- Pass 2: per-page details (deduped, stream again) ---
     html_parts.append('<h2>Per-Page Details</h2>')
     clean_pages = []
-    for url, data in _iter_jsonl(jsonl_path):
+    for url, data in _iter_deduped(jsonl_path):
         violations = data.get(EARL_FAILED, [])
         incomplete = data.get(EARL_CANTTELL, [])
         # Filter out allowlisted incompletes
@@ -2354,7 +2357,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
     pages_with_incompletes = set()
     suppressed_count = 0
 
-    for url, data in _iter_jsonl(jsonl_path):
+    for url, data in _iter_deduped(jsonl_path):
         total_pages += 1
         path = urlparse(url).path
 
@@ -2955,7 +2958,7 @@ OTHER NOTES
     total_incomplete = 0
     violation_rules = set()
     if jsonl_path and os.path.exists(jsonl_path):
-        for _, data in _iter_jsonl(jsonl_path):
+        for _, data in _iter_deduped(jsonl_path):
             total_violations += _count_nodes(data.get(EARL_FAILED, []))
             total_incomplete += _count_nodes(data.get(EARL_CANTTELL, []))
             for v in data.get(EARL_FAILED, []):
