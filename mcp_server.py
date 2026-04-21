@@ -11,12 +11,11 @@ Tools are designed for quick operations that return in seconds:
   list_engines   — show installed engines and versions (instant)
   lookup_wcag    — look up a WCAG Success Criterion (instant)
 
-Site crawls (--max-pages, --workers) are long-running and should be
-run via the CLI, not MCP.  Use the /wcag-audit skill or Bash tool.
+Site crawls are long-running — use the CLI or /wcag-audit skill.
 
 Usage:
-    python3 mcp_server.py                  # start server
-    python3 a11y-catscan.py --mcp          # same thing
+    python3 mcp_server.py
+    python3 a11y-catscan.py --mcp
 
 Configure in .mcp.json:
     {
@@ -49,12 +48,13 @@ sys.path.insert(0, SCRIPT_DIR)
 from mcp.server.fastmcp import FastMCP
 
 from engine_mappings import (
-    SC_META, sc_name, sc_level, IBM_SC_MAP,
+    SC_META, sc_name, IBM_SC_MAP,
     EARL_FAILED, EARL_CANTTELL,
     ARIA_CATEGORIES, BP_CATEGORIES)
 from engines.axe import AXE_RULES
 from engines.alfa import ALFA_RULES
 from engines.htmlcs import HTMLCS_SNIFFS
+from scanner import Scanner, count_nodes
 
 mcp = FastMCP("wcag-audit")
 
@@ -70,47 +70,6 @@ def _get_axe_version():
         return 'not installed'
 
 
-def _read_jsonl_findings(jsonl_path):
-    """Read findings from a JSONL file, return flat list of findings."""
-    findings = []
-    if not os.path.exists(jsonl_path):
-        return findings
-    with open(jsonl_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            for page_url, data in obj.items():
-                for outcome in (EARL_FAILED, EARL_CANTTELL):
-                    for item in data.get(outcome, []):
-                        selector = ''
-                        html = ''
-                        if item.get('nodes'):
-                            node = item['nodes'][0]
-                            selector = (node.get('target', [''])[0]
-                                        if node.get('target') else '')
-                            html = node.get('html', '')[:200]
-                        findings.append({
-                            'url': page_url,
-                            'outcome': outcome,
-                            'id': item.get('id', ''),
-                            'engine': item.get('engine', ''),
-                            'engines': item.get('engines', {}),
-                            'engine_count': item.get('engine_count', 1),
-                            'description': item.get('description', ''),
-                            'help': item.get('help', ''),
-                            'impact': item.get('impact', ''),
-                            'tags': item.get('tags', []),
-                            'selector': selector,
-                            'html': html,
-                        })
-    return findings
-
-
 @mcp.tool()
 async def scan_page(
     url: str,
@@ -119,9 +78,9 @@ async def scan_page(
 ) -> str:
     """Scan a single page for WCAG accessibility issues.
 
-    Runs up to four accessibility engines against one URL and returns
-    deduped findings with cross-engine confirmation.  Takes 3-17s
-    depending on engines selected.
+    Launches a browser, runs up to four accessibility engines against
+    one URL, and returns deduped findings with cross-engine confirmation.
+    Takes 3-17 seconds depending on engines selected.
 
     Args:
         url: The page URL to scan (must start with http:// or https://)
@@ -129,53 +88,60 @@ async def scan_page(
         level: WCAG conformance level: wcag21aa (default), wcag21a, wcag21aaa, best
 
     Returns:
-        JSON with summary counts, deduped findings array with CSS selectors
-        and engine attribution, and paths to full report files.
+        JSON with url, clean (bool), failed/cantTell counts, deduped
+        findings array with CSS selectors and engine attribution.
     """
-    import subprocess
-    cmd = [
-        sys.executable, os.path.join(SCRIPT_DIR, 'a11y-catscan.py'),
-        '--engine', engines,
-        '--level', level,
-        '--page', '-q', '--summary-json',
-        url
-    ]
+    engine_list = (['axe', 'alfa', 'ibm', 'htmlcs'] if engines == 'all'
+                   else [e.strip() for e in engines.split(',')])
+
     log.info('scan_page: %s (engines=%s, level=%s)', url, engines, level)
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=120, cwd=SCRIPT_DIR)
 
-    # Parse summary JSON from the last line of output
-    output = result.stdout + result.stderr
-    summary = {}
-    for line in reversed(output.strip().split('\n')):
-        try:
-            summary = json.loads(line)
-            break
-        except (json.JSONDecodeError, ValueError):
-            continue
+    async with Scanner(engines=engine_list, level=level) as scanner:
+        result = await scanner.scan_page(url)
 
-    # Extract report paths from output
-    reports = {}
-    for line in output.split('\n'):
-        if 'JSON report:' in line:
-            reports['json'] = line.split('JSON report:')[-1].strip()
-        elif 'HTML report:' in line:
-            reports['html'] = line.split('HTML report:')[-1].strip()
+    if result.get('skipped'):
+        return json.dumps({
+            'url': url,
+            'skipped': result['skipped'],
+            'clean': True,
+            'failed': 0,
+            'cantTell': 0,
+            'findings': [],
+        }, indent=2)
 
-    # Read detailed findings from the JSONL
+    failed = count_nodes(result.get(EARL_FAILED, []))
+    cant_tell = count_nodes(result.get(EARL_CANTTELL, []))
+
+    # Flatten findings for the response
     findings = []
-    json_path = reports.get('json', '')
-    if json_path:
-        jsonl_path = json_path.replace('.json', '.jsonl')
-        findings = _read_jsonl_findings(jsonl_path)
+    for outcome in (EARL_FAILED, EARL_CANTTELL):
+        for item in result.get(outcome, []):
+            selector = ''
+            html = ''
+            if item.get('nodes'):
+                node = item['nodes'][0]
+                selector = (node.get('target', [''])[0]
+                            if node.get('target') else '')
+                html = node.get('html', '')[:200]
+            findings.append({
+                'outcome': outcome,
+                'id': item.get('id', ''),
+                'engines': item.get('engines', {}),
+                'engine_count': item.get('engine_count', 1),
+                'impact': item.get('impact', ''),
+                'tags': item.get('tags', []),
+                'description': item.get('description', ''),
+                'selector': selector,
+                'html': html,
+            })
 
     return json.dumps({
-        'url': url,
-        'clean': summary.get('clean', False),
-        'failed': summary.get(EARL_FAILED, 0),
-        'cantTell': summary.get(EARL_CANTTELL, 0),
+        'url': result.get('url', url),
+        'clean': failed == 0,
+        'failed': failed,
+        'cantTell': cant_tell,
+        'elapsed': round(result.get('elapsed', 0), 1),
         'findings': findings,
-        'reports': reports,
     }, indent=2)
 
 
@@ -217,14 +183,16 @@ async def analyze_report(
                                 keys = [t for t in tags
                                         if t.startswith('wcag-')]
                             elif group_by == 'engine':
-                                engines = item.get('engines', {})
-                                if engines:
-                                    keys = ['+'.join(sorted(engines))]
+                                engines_dict = item.get('engines', {})
+                                if engines_dict:
+                                    keys = ['+'.join(
+                                        sorted(engines_dict))]
                                 else:
                                     keys = [item.get('engine', '?')]
                             elif group_by == 'bp':
                                 keys = [t for t in tags
-                                        if t.startswith(('bp-', 'aria-'))]
+                                        if t.startswith(
+                                            ('bp-', 'aria-'))]
                                 if not keys:
                                     keys = [t for t in tags
                                             if t.startswith('wcag-')]
@@ -236,7 +204,8 @@ async def analyze_report(
 
                             for node in item.get('nodes', []):
                                 sel = (node.get('target', [''])[0]
-                                       if node.get('target') else '')
+                                       if node.get('target')
+                                       else '')
                                 for key in keys:
                                     if key not in groups:
                                         groups[key] = {
@@ -252,7 +221,8 @@ async def analyze_report(
 
     result = []
     for key, info in sorted(groups.items(),
-                            key=lambda x: x[1]['count'], reverse=True):
+                            key=lambda x: x[1]['count'],
+                            reverse=True):
         sc = key.replace('wcag-', '') if key.startswith('wcag-') else ''
         result.append({
             'key': key,
@@ -297,14 +267,13 @@ async def list_engines() -> str:
                       '@siteimprove', 'alfa-rules')),
     ]
     for name, full, ver, rules, typ, path in checks:
-        installed = os.path.exists(path)
         engines.append({
             'name': name,
             'full_name': full,
             'version': ver,
             'rules': rules,
             'type': typ,
-            'installed': installed,
+            'installed': os.path.exists(path),
         })
 
     return json.dumps({
@@ -336,7 +305,6 @@ async def lookup_wcag(sc: str) -> str:
         return json.dumps({
             'error': 'Unknown SC: ' + sc,
             'hint': 'Use format like 1.4.3 or 2.4.7',
-            'available': len(SC_META),
         })
 
     level, version, name = meta
