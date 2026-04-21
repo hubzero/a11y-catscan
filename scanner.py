@@ -19,6 +19,7 @@ Or without context manager:
 
 import asyncio
 import importlib
+import importlib.util
 import json
 import os
 import re
@@ -328,6 +329,24 @@ class Scanner:
     @property
     def engine_names(self):
         return [type(e).__name__ for e in self._engines]
+
+    @property
+    def login_exclude_paths(self):
+        """Paths the login plugin wants excluded (e.g. /logout)."""
+        if (self._login_plugin
+                and hasattr(self._login_plugin, 'exclude_paths')):
+            return list(self._login_plugin.exclude_paths)
+        return []
+
+    @property
+    def browser(self):
+        """The Playwright Browser instance (for advanced crawl-loop use)."""
+        return self._browser
+
+    @property
+    def context(self):
+        """The authenticated BrowserContext, or None."""
+        return self._context
 
     async def start(self):
         """Launch browser and start all engines."""

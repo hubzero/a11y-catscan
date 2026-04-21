@@ -6,3 +6,4 @@ allowlist.yaml
 .auth-state.json
 node_modules/
 cookies.json
+mcp_stderr.log
