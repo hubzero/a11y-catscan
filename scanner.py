@@ -23,8 +23,11 @@ import importlib.util
 import json
 import os
 import re
+import signal
+import subprocess
 import sys
 import time
+import urllib.request
 from datetime import datetime
 
 from engine_mappings import (
@@ -385,20 +388,47 @@ class Scanner:
                 if arg not in launch_args:
                     launch_args.append(arg)
 
-        # Launch Chromium
-        launch_kw = {'headless': True, 'args': launch_args}
-        if (self._chromium_path
-                and os.path.isfile(self._chromium_path)):
-            launch_kw['executable_path'] = self._chromium_path
-        self._browser = await self._pw.chromium.launch(**launch_kw)
+        # Launch Chromium.
+        # If Alfa is enabled, Alfa's Node.js subprocess launches
+        # Chromium via Playwright's launchServer() and returns a
+        # GUID-protected WebSocket endpoint.  Python connects to
+        # that endpoint — no open debug ports, no CDP.
+        # If Alfa is not enabled, use Playwright's native launch().
+        alfa_eng = None
+        for eng in self._engines:
+            if isinstance(eng, AlfaEngine):
+                alfa_eng = eng
+                break
+
+        if alfa_eng:
+            # Start Alfa first — it launches the browser server
+            await alfa_eng.start(None)
+            ws_url = alfa_eng.ws_endpoint
+            if not ws_url:
+                raise RuntimeError(
+                    'Alfa did not return a WebSocket endpoint')
+            # Connect Python to Alfa's browser server
+            self._browser = await self._pw.chromium.connect(ws_url)
+            if not self.quiet:
+                print("  Connected to Alfa browser server")
+        else:
+            launch_kw = {'headless': True, 'args': launch_args}
+            if (self._chromium_path
+                    and os.path.isfile(self._chromium_path)):
+                launch_kw['executable_path'] = self._chromium_path
+            self._browser = await self._pw.chromium.launch(
+                **launch_kw)
 
         # Authenticate if configured
         login_script = self._auth_config.get('login_script', '')
         if login_script:
             await self._setup_auth(login_script)
 
-        # Start all engines
+        # Start non-Alfa engines (Alfa already started if present —
+        # it launched the browser server above)
         for eng in list(self._engines):
+            if isinstance(eng, AlfaEngine):
+                continue  # already started
             try:
                 await eng.start(self._browser)
             except Exception as e:
@@ -487,30 +517,38 @@ class Scanner:
 
         Preserves auth state.  Called by the crawl loop every N pages.
         """
-        # Stop engines
+        # Stop all engines
         for eng in self._engines:
             try:
                 await eng.stop()
             except Exception:
                 pass
 
-        # Close browser
+        # Close browser (Alfa's server dies with its subprocess)
         try:
             await self._browser.close()
         except Exception:
             pass
 
-        # Relaunch
-        launch_args = ['--disable-dev-shm-usage', '--disable-gpu']
+        # Relaunch — same logic as start()
+        alfa_eng = None
         for eng in self._engines:
-            for arg in eng.browser_launch_args():
-                if arg not in launch_args:
-                    launch_args.append(arg)
-        launch_kw = {'headless': True, 'args': launch_args}
-        if (self._chromium_path
-                and os.path.isfile(self._chromium_path)):
-            launch_kw['executable_path'] = self._chromium_path
-        self._browser = await self._pw.chromium.launch(**launch_kw)
+            if isinstance(eng, AlfaEngine):
+                alfa_eng = eng
+                break
+
+        if alfa_eng:
+            await alfa_eng.start(None)
+            self._browser = await self._pw.chromium.connect(
+                alfa_eng.ws_endpoint)
+        else:
+            launch_args = ['--disable-dev-shm-usage', '--disable-gpu']
+            launch_kw = {'headless': True, 'args': launch_args}
+            if (self._chromium_path
+                    and os.path.isfile(self._chromium_path)):
+                launch_kw['executable_path'] = self._chromium_path
+            self._browser = await self._pw.chromium.launch(
+                **launch_kw)
 
         # Re-authenticate
         if self._login_plugin:
