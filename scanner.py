@@ -471,6 +471,13 @@ class Scanner:
                 pass
             self._pw = None
 
+        # Let the event loop process any pending cleanup callbacks
+        # from Playwright's browser connection.  Without this,
+        # asyncio.run() closes the loop with pending Futures that
+        # produce 'TargetClosedError' and 'Event loop is closed'
+        # tracebacks during garbage collection.
+        await asyncio.sleep(0)
+
         self._started = False
 
     async def scan_page(self, url, *, extract_links=False, dedup=True):

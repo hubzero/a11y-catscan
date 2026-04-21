@@ -843,6 +843,21 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None, level=None,
         async def _pw_sliding_window():
             nonlocal page_count, total_page_time
 
+            # Suppress Playwright's 'TargetClosedError' Future warnings
+            # at shutdown.  These are harmless — they fire when the
+            # browser connection drops during cleanup.
+            loop = asyncio.get_event_loop()
+            _orig_handler = loop.get_exception_handler()
+            def _suppress_target_closed(loop, context):
+                msg = str(context.get('exception', ''))
+                if 'TargetClosedError' in msg or 'Browser closed' in msg:
+                    return  # suppress
+                if _orig_handler:
+                    _orig_handler(loop, context)
+                else:
+                    loop.default_exception_handler(context)
+            loop.set_exception_handler(_suppress_target_closed)
+
             # Scanner manages browser + engines + auth.
             await scanner.start()
             try:
