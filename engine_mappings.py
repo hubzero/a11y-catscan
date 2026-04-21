@@ -32,58 +32,141 @@ Last updated: 2026-04-20 from accessibility-checker-engine 4.0.16
 
 import re
 
-# WCAG SC → (level, version_introduced)
+# ── EARL outcomes (W3C standard) ────────────────────────────────
+#
+# The W3C Evaluation and Report Language (EARL 1.0) defines four
+# canonical test outcomes.  All major accessibility engines use these
+# internally (axe-core RawNodeResult, Alfa Outcome.Value, IBM ACT
+# mappings).  We use EARL terms as the internal representation and
+# translate to user-friendly names at the report/display layer.
+#
+# Reference: https://www.w3.org/TR/EARL10-Schema/#outcome
+
+EARL_FAILED = 'failed'           # Definite accessibility failure
+EARL_CANTTELL = 'cantTell'       # Needs manual review
+EARL_PASSED = 'passed'           # Test passed
+EARL_INAPPLICABLE = 'inapplicable'  # Test does not apply
+
+# EARL → user-friendly display names (CLI output, HTML reports)
+EARL_TO_DISPLAY = {
+    EARL_FAILED: 'failed',
+    EARL_CANTTELL: "can't tell",
+    EARL_PASSED: 'passed',
+    EARL_INAPPLICABLE: 'inapplicable',
+}
+
+
+# WCAG Success Criteria — complete inventory.
+# Each entry: 'X.Y.Z': (level, version_introduced, official_name)
+# Names are from the W3C WCAG spec headings.
+# Reference: https://www.w3.org/TR/WCAG22/
 SC_META = {
-    # Perceivable
-    '1.1.1': ('A', '2.0'),
-    '1.2.1': ('A', '2.0'), '1.2.2': ('A', '2.0'), '1.2.3': ('A', '2.0'),
-    '1.2.4': ('AA', '2.0'), '1.2.5': ('AA', '2.0'),
-    '1.2.6': ('AAA', '2.0'), '1.2.7': ('AAA', '2.0'),
-    '1.2.8': ('AAA', '2.0'), '1.2.9': ('AAA', '2.0'),
-    '1.3.1': ('A', '2.0'), '1.3.2': ('A', '2.0'), '1.3.3': ('A', '2.0'),
-    '1.3.4': ('AA', '2.1'), '1.3.5': ('AA', '2.1'), '1.3.6': ('AAA', '2.1'),
-    '1.4.1': ('A', '2.0'), '1.4.2': ('A', '2.0'),
-    '1.4.3': ('AA', '2.0'), '1.4.4': ('AA', '2.0'), '1.4.5': ('AA', '2.0'),
-    '1.4.6': ('AAA', '2.0'), '1.4.7': ('AAA', '2.0'),
-    '1.4.8': ('AAA', '2.0'), '1.4.9': ('AAA', '2.0'),
-    '1.4.10': ('AA', '2.1'), '1.4.11': ('AA', '2.1'),
-    '1.4.12': ('AA', '2.1'), '1.4.13': ('AA', '2.1'),
-    # Operable
-    '2.1.1': ('A', '2.0'), '2.1.2': ('A', '2.0'),
-    '2.1.3': ('AAA', '2.0'), '2.1.4': ('A', '2.1'),
-    '2.2.1': ('A', '2.0'), '2.2.2': ('A', '2.0'),
-    '2.2.3': ('AAA', '2.0'), '2.2.4': ('AAA', '2.0'),
-    '2.2.5': ('AAA', '2.0'), '2.2.6': ('AAA', '2.1'),
-    '2.3.1': ('A', '2.0'), '2.3.2': ('AAA', '2.0'), '2.3.3': ('AAA', '2.0'),
-    '2.4.1': ('A', '2.0'), '2.4.2': ('A', '2.0'), '2.4.3': ('A', '2.0'),
-    '2.4.4': ('A', '2.0'), '2.4.5': ('AA', '2.0'), '2.4.6': ('AA', '2.0'),
-    '2.4.7': ('AA', '2.0'), '2.4.8': ('AAA', '2.0'),
-    '2.4.9': ('AAA', '2.0'), '2.4.10': ('AAA', '2.0'),
-    '2.4.11': ('AA', '2.2'), '2.4.12': ('AAA', '2.2'),
-    '2.4.13': ('AAA', '2.2'),
-    '2.5.1': ('A', '2.1'), '2.5.2': ('A', '2.1'),
-    '2.5.3': ('A', '2.1'), '2.5.4': ('A', '2.1'),
-    '2.5.5': ('AAA', '2.1'), '2.5.6': ('AAA', '2.1'),
-    '2.5.7': ('AA', '2.2'), '2.5.8': ('AA', '2.2'),
-    # Understandable
-    '3.1.1': ('A', '2.0'), '3.1.2': ('AA', '2.0'),
-    '3.1.3': ('AAA', '2.0'), '3.1.4': ('AAA', '2.0'),
-    '3.1.5': ('AAA', '2.0'), '3.1.6': ('AAA', '2.0'),
-    '3.2.1': ('A', '2.0'), '3.2.2': ('A', '2.0'),
-    '3.2.3': ('AA', '2.0'), '3.2.4': ('AA', '2.0'),
-    '3.2.5': ('AAA', '2.0'), '3.2.6': ('A', '2.2'),
-    '3.3.1': ('A', '2.0'), '3.3.2': ('A', '2.0'),
-    '3.3.3': ('AA', '2.0'), '3.3.4': ('AA', '2.0'),
-    '3.3.5': ('AAA', '2.0'), '3.3.6': ('AAA', '2.0'),
-    '3.3.7': ('A', '2.2'), '3.3.8': ('AA', '2.2'), '3.3.9': ('A', '2.2'),
-    # Robust
-    '4.1.1': ('A', '2.0'), '4.1.2': ('A', '2.0'), '4.1.3': ('AA', '2.1'),
+    # 1. Perceivable
+    '1.1.1': ('A', '2.0', 'Non-text Content'),
+    '1.2.1': ('A', '2.0', 'Audio-only and Video-only (Prerecorded)'),
+    '1.2.2': ('A', '2.0', 'Captions (Prerecorded)'),
+    '1.2.3': ('A', '2.0', 'Audio Description or Media Alternative (Prerecorded)'),
+    '1.2.4': ('AA', '2.0', 'Captions (Live)'),
+    '1.2.5': ('AA', '2.0', 'Audio Description (Prerecorded)'),
+    '1.2.6': ('AAA', '2.0', 'Sign Language (Prerecorded)'),
+    '1.2.7': ('AAA', '2.0', 'Extended Audio Description (Prerecorded)'),
+    '1.2.8': ('AAA', '2.0', 'Media Alternative (Prerecorded)'),
+    '1.2.9': ('AAA', '2.0', 'Audio-only (Live)'),
+    '1.3.1': ('A', '2.0', 'Info and Relationships'),
+    '1.3.2': ('A', '2.0', 'Meaningful Sequence'),
+    '1.3.3': ('A', '2.0', 'Sensory Characteristics'),
+    '1.3.4': ('AA', '2.1', 'Orientation'),
+    '1.3.5': ('AA', '2.1', 'Identify Input Purpose'),
+    '1.3.6': ('AAA', '2.1', 'Identify Purpose'),
+    '1.4.1': ('A', '2.0', 'Use of Color'),
+    '1.4.2': ('A', '2.0', 'Audio Control'),
+    '1.4.3': ('AA', '2.0', 'Contrast (Minimum)'),
+    '1.4.4': ('AA', '2.0', 'Resize Text'),
+    '1.4.5': ('AA', '2.0', 'Images of Text'),
+    '1.4.6': ('AAA', '2.0', 'Contrast (Enhanced)'),
+    '1.4.7': ('AAA', '2.0', 'Low or No Background Audio'),
+    '1.4.8': ('AAA', '2.0', 'Visual Presentation'),
+    '1.4.9': ('AAA', '2.0', 'Images of Text (No Exception)'),
+    '1.4.10': ('AA', '2.1', 'Reflow'),
+    '1.4.11': ('AA', '2.1', 'Non-text Contrast'),
+    '1.4.12': ('AA', '2.1', 'Text Spacing'),
+    '1.4.13': ('AA', '2.1', 'Content on Hover or Focus'),
+    # 2. Operable
+    '2.1.1': ('A', '2.0', 'Keyboard'),
+    '2.1.2': ('A', '2.0', 'No Keyboard Trap'),
+    '2.1.3': ('AAA', '2.0', 'Keyboard (No Exception)'),
+    '2.1.4': ('A', '2.1', 'Character Key Shortcuts'),
+    '2.2.1': ('A', '2.0', 'Timing Adjustable'),
+    '2.2.2': ('A', '2.0', 'Pause, Stop, Hide'),
+    '2.2.3': ('AAA', '2.0', 'No Timing'),
+    '2.2.4': ('AAA', '2.0', 'Interruptions'),
+    '2.2.5': ('AAA', '2.0', 'Re-authenticating'),
+    '2.2.6': ('AAA', '2.1', 'Timeouts'),
+    '2.3.1': ('A', '2.0', 'Three Flashes or Below Threshold'),
+    '2.3.2': ('AAA', '2.0', 'Three Flashes'),
+    '2.3.3': ('AAA', '2.0', 'Animation from Interactions'),
+    '2.4.1': ('A', '2.0', 'Bypass Blocks'),
+    '2.4.2': ('A', '2.0', 'Page Titled'),
+    '2.4.3': ('A', '2.0', 'Focus Order'),
+    '2.4.4': ('A', '2.0', 'Link Purpose (In Context)'),
+    '2.4.5': ('AA', '2.0', 'Multiple Ways'),
+    '2.4.6': ('AA', '2.0', 'Headings and Labels'),
+    '2.4.7': ('AA', '2.0', 'Focus Visible'),
+    '2.4.8': ('AAA', '2.0', 'Location'),
+    '2.4.9': ('AAA', '2.0', 'Link Purpose (Link Only)'),
+    '2.4.10': ('AAA', '2.0', 'Section Headings'),
+    '2.4.11': ('AA', '2.2', 'Focus Not Obscured (Minimum)'),
+    '2.4.12': ('AAA', '2.2', 'Focus Not Obscured (Enhanced)'),
+    '2.4.13': ('AAA', '2.2', 'Focus Appearance'),
+    '2.5.1': ('A', '2.1', 'Pointer Gestures'),
+    '2.5.2': ('A', '2.1', 'Pointer Cancellation'),
+    '2.5.3': ('A', '2.1', 'Label in Name'),
+    '2.5.4': ('A', '2.1', 'Motion Actuation'),
+    '2.5.5': ('AAA', '2.1', 'Target Size (Enhanced)'),
+    '2.5.6': ('AAA', '2.1', 'Concurrent Input Mechanisms'),
+    '2.5.7': ('AA', '2.2', 'Dragging Movements'),
+    '2.5.8': ('AA', '2.2', 'Target Size (Minimum)'),
+    # 3. Understandable
+    '3.1.1': ('A', '2.0', 'Language of Page'),
+    '3.1.2': ('AA', '2.0', 'Language of Parts'),
+    '3.1.3': ('AAA', '2.0', 'Unusual Words'),
+    '3.1.4': ('AAA', '2.0', 'Abbreviations'),
+    '3.1.5': ('AAA', '2.0', 'Reading Level'),
+    '3.1.6': ('AAA', '2.0', 'Pronunciation'),
+    '3.2.1': ('A', '2.0', 'On Focus'),
+    '3.2.2': ('A', '2.0', 'On Input'),
+    '3.2.3': ('AA', '2.0', 'Consistent Navigation'),
+    '3.2.4': ('AA', '2.0', 'Consistent Identification'),
+    '3.2.5': ('AAA', '2.0', 'Change on Request'),
+    '3.2.6': ('A', '2.2', 'Consistent Help'),
+    '3.3.1': ('A', '2.0', 'Error Identification'),
+    '3.3.2': ('A', '2.0', 'Labels or Instructions'),
+    '3.3.3': ('AA', '2.0', 'Error Suggestion'),
+    '3.3.4': ('AA', '2.0', 'Error Prevention (Legal, Financial, Data)'),
+    '3.3.5': ('AAA', '2.0', 'Help'),
+    '3.3.6': ('AAA', '2.0', 'Error Prevention (All)'),
+    '3.3.7': ('A', '2.2', 'Redundant Entry'),
+    '3.3.8': ('AA', '2.2', 'Accessible Authentication (Minimum)'),
+    '3.3.9': ('A', '2.2', 'Accessible Authentication (Enhanced)'),
+    # 4. Robust
+    '4.1.1': ('A', '2.0', 'Parsing'),
+    '4.1.2': ('A', '2.0', 'Name, Role, Value'),
+    '4.1.3': ('AA', '2.1', 'Status Messages'),
 }
 
 
 def sc_level(sc):
     """Return (level, version) for a WCAG SC, e.g. ('AA', '2.1')."""
-    return SC_META.get(sc, ('?', '?'))
+    meta = SC_META.get(sc)
+    if meta:
+        return (meta[0], meta[1])
+    return ('?', '?')
+
+
+def sc_name(sc):
+    """Return the official W3C name for a WCAG SC, e.g. 'Contrast (Minimum)'."""
+    meta = SC_META.get(sc)
+    return meta[2] if meta else ''
 
 
 # IBM Equal Access rule ID → WCAG SC(s).
@@ -257,9 +340,9 @@ def ibm_rule_to_sc(rule_id):
 
 
 def ibm_rule_to_tags(rule_id):
-    """Map an IBM rule ID to axe-style WCAG tags for grouping."""
+    """Map an IBM rule ID to normalized WCAG tags (wcag-X.Y.Z format)."""
     scs = ibm_rule_to_sc(rule_id)
-    return ['wcag' + sc.replace('.', '') for sc in scs]
+    return ['wcag-' + sc for sc in scs]
 
 
 def htmlcs_code_to_sc(code):
@@ -270,6 +353,290 @@ def htmlcs_code_to_sc(code):
     m = re.search(r'(\d+)_(\d+)_(\d+)', code)
     if m:
         return '{}.{}.{}'.format(m.group(1), m.group(2), m.group(3))
+    return None
+
+
+# ── Best practice categories ────────────────────────────────────
+#
+# Rules that don't map to a specific WCAG Success Criterion but still
+# represent widely-agreed accessibility best practices.  Only axe-core
+# and IBM Equal Access have such rules; HTMLCS and Alfa are purely
+# WCAG-derived.
+#
+# The canonical categories are based on axe-core's `cat.*` tags with
+# IBM RECOMMENDATION rules mapped into the same taxonomy.  Each rule
+# maps to exactly one category.
+#
+# Sources:
+#   axe-core 4.11.3: rules tagged 'best-practice' (30 rules)
+#   IBM Equal Access 4.0.16: rules that produce 'RECOMMENDATION' results
+#     Note: IBM categorization is per-result, not per-rule.  A rule can
+#     produce VIOLATION on one element and RECOMMENDATION on another.
+#     The rules listed here are those that *can* produce RECOMMENDATION.
+#
+# Last updated: 2026-04-20
+
+# Category descriptions — what each best-practice category covers.
+BP_CATEGORIES = {
+    'landmarks': 'Page structure: content in landmarks, landmark hierarchy '
+                 'and uniqueness, required landmarks (main, banner, etc.)',
+    'headings': 'Heading hierarchy: order, presence of h1, non-empty '
+                'headings, heading vs bold misuse',
+    'aria-usage': 'Deprecated — see ARIA_CATEGORIES for fine-grained '
+                  'ARIA classifications (aria-valid-attrs, etc.)',
+    'keyboard': 'Keyboard access beyond WCAG: accesskey uniqueness, '
+                'focus order semantics, tabindex values, skip links',
+    'forms': 'Form usability: visible labels (not title-only), field '
+             'grouping, select option grouping, legend validity',
+    'tables': 'Table semantics: scope attributes, caption/summary '
+              'duplication, empty headers, layout table linearization',
+    'images': 'Image alt text quality: redundant alt, background images, '
+              'alt text brevity for media',
+    'color': 'Color and contrast beyond WCAG: high-contrast mode '
+             'visibility, color as sole indicator',
+    'viewport': 'Viewport scaling: meta viewport allows significant zoom',
+    'scripting': 'Script accessibility: mouse events with keyboard '
+                 'equivalents, onclick misuse, target=_blank warnings',
+    'testability': 'Scanner limitations: hidden content, untested frames',
+}
+
+# axe-core best-practice rules → category
+AXE_BP_MAP = {
+    # Landmarks
+    'region':                              'landmarks',
+    'landmark-one-main':                   'landmarks',
+    'landmark-unique':                     'landmarks',
+    'landmark-banner-is-top-level':        'landmarks',
+    'landmark-main-is-top-level':          'landmarks',
+    'landmark-contentinfo-is-top-level':   'landmarks',
+    'landmark-complementary-is-top-level': 'landmarks',
+    'landmark-no-duplicate-banner':        'landmarks',
+    'landmark-no-duplicate-main':          'landmarks',
+    'landmark-no-duplicate-contentinfo':   'landmarks',
+    # Headings
+    'heading-order':                       'headings',
+    'page-has-heading-one':                'headings',
+    'empty-heading':                       'headings',
+    'empty-table-header':                  'headings',
+    # ARIA usage
+    'aria-allowed-role':                   'aria-usage',
+    'aria-dialog-name':                    'aria-usage',
+    'aria-text':                           'aria-usage',
+    'aria-treeitem-name':                  'aria-usage',
+    # Keyboard
+    'accesskeys':                          'keyboard',
+    'focus-order-semantics':               'keyboard',
+    'skip-link':                           'keyboard',
+    'tabindex':                            'keyboard',
+    # Forms
+    'label-title-only':                    'forms',
+    # Tables
+    'scope-attr-valid':                    'tables',
+    'table-duplicate-name':                'tables',
+    # Images
+    'image-redundant-alt':                 'images',
+    # Viewport
+    'meta-viewport-large':                 'viewport',
+    # Testability
+    'frame-tested':                        'testability',
+    'hidden-content':                      'testability',
+}
+
+# IBM RECOMMENDATION rules → category.
+# These rules CAN produce RECOMMENDATION-category results (as opposed
+# to VIOLATION).  The engine labels each finding at runtime; this map
+# lets us categorize the non-WCAG findings they produce.
+IBM_BP_MAP = {
+    # Landmarks
+    'aria_content_in_landmark':            'landmarks',
+    'aria_contentinfo_misuse':             'landmarks',
+    # Headings
+    'heading_content_exists':              'headings',
+    # ARIA usage
+    'aria_child_valid':                    'aria-usage',
+    'element_tabbable_role_valid':         'aria-usage',
+    # Forms
+    'input_fields_grouped':               'forms',
+    'select_options_grouped':              'forms',
+    'fieldset_legend_valid':               'forms',
+    # Tables
+    'table_layout_linearized':            'tables',
+    # Images
+    'img_alt_background':                 'images',
+    'media_alt_brief':                    'images',
+    # Color
+    'style_highcontrast_visible':         'color',
+    # Scripting
+    'element_mouseevent_keyboard':        'scripting',
+    'script_onclick_avoid':               'scripting',
+    'a_target_warning':                   'scripting',
+}
+
+
+# ── ARIA conformance categories ─────────────────────────────────
+#
+# WAI-ARIA is a W3C specification separate from WCAG.  WCAG references
+# it (primarily from SC 4.1.2), so ARIA violations are implicit WCAG
+# failures — but they're a distinct category worth tracking separately.
+#
+# A finding can carry BOTH a WCAG SC tag AND an aria-* tag.  For
+# example, "invalid aria-valuenow" is both WCAG 4.1.2 and
+# aria-valid-attrs.  Filtering by WCAG shows it under 4.1.2;
+# filtering by ARIA shows it under aria-valid-attrs.
+#
+# Reference: https://www.w3.org/TR/wai-aria-1.2/
+
+ARIA_CATEGORIES = {
+    'valid-attrs': 'ARIA attribute validity: attributes exist, values '
+                        'are valid, attributes allowed/not prohibited for role',
+    'valid-roles': 'ARIA role validity: role values exist, not '
+                        'deprecated, appropriate for the element',
+    'required-structure': 'ARIA document structure: required owned '
+                               'elements (children), required context roles '
+                               '(parents), valid descendants',
+    'naming': 'ARIA accessible names: buttons, inputs, toggles, '
+                   'meters, progressbars, dialogs, treeitems have names',
+    'hidden': 'aria-hidden correctness: not on body, hidden '
+                   'elements and their children not focusable',
+    'required-states': 'Required ARIA states and properties: '
+                            'required attributes present for the role',
+}
+
+# Cross-engine ARIA rule → aria-* category mappings.
+# Rules listed here get an 'aria-<category>' tag on their results,
+# in addition to any WCAG SC tags they already carry.
+AXE_ARIA_MAP = {
+    # aria-valid-attrs
+    'aria-valid-attr':          'valid-attrs',
+    'aria-valid-attr-value':    'valid-attrs',
+    'aria-allowed-attr':        'valid-attrs',
+    'aria-prohibited-attr':     'valid-attrs',
+    'aria-conditional-attr':    'valid-attrs',
+    'aria-braille-equivalent':  'valid-attrs',
+    # aria-valid-roles
+    'aria-roles':               'valid-roles',
+    'aria-deprecated-role':     'valid-roles',
+    'aria-allowed-role':        'valid-roles',
+    'aria-roledescription':     'valid-roles',
+    'presentation-role-conflict': 'valid-roles',
+    # aria-required-structure
+    'aria-required-children':   'required-structure',
+    'aria-required-parent':     'required-structure',
+    # aria-naming
+    'aria-command-name':        'naming',
+    'aria-input-field-name':    'naming',
+    'aria-toggle-field-name':   'naming',
+    'aria-meter-name':          'naming',
+    'aria-progressbar-name':    'naming',
+    'aria-tooltip-name':        'naming',
+    'aria-dialog-name':         'naming',
+    'aria-treeitem-name':       'naming',
+    'aria-text':                'naming',
+    # aria-hidden
+    'aria-hidden-body':         'hidden',
+    'aria-hidden-focus':        'hidden',
+    # aria-required-states
+    'aria-required-attr':       'required-states',
+}
+
+IBM_ARIA_MAP = {
+    # aria-valid-attrs
+    'aria_attribute_exists':        'valid-attrs',
+    'aria_attribute_value_valid':   'valid-attrs',
+    'aria_attribute_allowed':       'valid-attrs',
+    'aria_attribute_conflict':      'valid-attrs',
+    'aria_attribute_redundant':     'valid-attrs',
+    # aria-valid-roles
+    'aria_role_valid':              'valid-roles',
+    'aria_role_allowed':            'valid-roles',
+    # aria-required-structure
+    'aria_child_valid':             'required-structure',
+    'aria_parent_required':         'required-structure',
+    'aria_descendant_valid':        'required-structure',
+    'aria_child_tabbable':          'required-structure',
+    # aria-naming
+    'aria_widget_labelled':         'naming',
+    'aria_accessiblename_exists':   'naming',
+    'aria_graphic_labelled':        'naming',
+    'aria_img_labelled':            'naming',
+    # aria-required-states
+    'aria_attribute_required':      'required-states',
+}
+
+ALFA_ARIA_MAP = {
+    # aria-valid-attrs
+    'sia-r18':  'valid-attrs',
+    'sia-r19':  'valid-attrs',
+    # aria-valid-roles
+    'sia-r21':  'valid-roles',
+    'sia-r70':  'valid-roles',
+    # aria-required-structure
+    'sia-r22':  'required-structure',
+    'sia-r23':  'required-structure',
+    'sia-r64':  'required-structure',
+    'sia-r110': 'required-structure',
+    # aria-hidden
+    'sia-r60':  'hidden',
+    'sia-r86':  'hidden',
+    # aria-required-states
+    'sia-r20':  'required-states',
+    'sia-r90':  'required-states',
+}
+
+# Also map Alfa's remaining unmapped rules that aren't ARIA but
+# are best practices.  These carry bp-* tags.
+ALFA_BP_MAP = {
+    'sia-r48':  'landmarks',   # deprecated element (structural)
+    'sia-r49':  'landmarks',   # deprecated attribute (structural)
+    'sia-r53':  'headings',    # heading is descriptive
+    'sia-r54':  'landmarks',   # landmark has unique role
+    'sia-r55':  'landmarks',   # landmark visible role
+    'sia-r56':  'landmarks',   # landmark is top-level
+    'sia-r57':  'landmarks',   # content in landmark / contrast candidate
+    'sia-r59':  'landmarks',   # body has main landmark
+    'sia-r61':  'landmarks',   # document has one main landmark
+    'sia-r72':  'viewport',    # paragraph max width
+    'sia-r75':  'viewport',    # font size >= 9px
+    'sia-r78':  'keyboard',    # no positive tabindex
+    'sia-r79':  'viewport',    # element not clipped
+    'sia-r85':  'keyboard',    # scrollable region focusable
+    'sia-r87':  'viewport',    # no first-child letter exception
+}
+
+
+def aria_category(engine, rule_id):
+    """Return the ARIA conformance category for a rule, or None.
+
+    A rule can have BOTH a WCAG SC and an ARIA category — they are
+    not mutually exclusive.  For example, axe's 'aria-valid-attr' is
+    both WCAG 4.1.2 and aria-valid-attrs.
+    """
+    if engine == 'axe':
+        return AXE_ARIA_MAP.get(rule_id)
+    if engine == 'ibm':
+        return IBM_ARIA_MAP.get(rule_id)
+    if engine == 'alfa':
+        return ALFA_ARIA_MAP.get(rule_id)
+    return None
+
+
+def bp_category(engine, rule_id):
+    """Return the best-practice category for a non-WCAG rule, or None.
+
+    Args:
+        engine: 'axe', 'ibm', 'alfa', or 'htmlcs'
+        rule_id: the engine-specific rule identifier
+
+    Returns:
+        Category string (e.g. 'landmarks') or None if the rule is
+        WCAG-mapped or not recognized as a best practice.
+    """
+    if engine == 'axe':
+        return AXE_BP_MAP.get(rule_id)
+    if engine == 'ibm':
+        return IBM_BP_MAP.get(rule_id)
+    if engine == 'alfa':
+        return ALFA_BP_MAP.get(rule_id)
     return None
 
 
