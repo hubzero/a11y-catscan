@@ -48,6 +48,7 @@ Last updated: 2026-04-21
 """
 
 import re
+from enum import StrEnum
 
 # ── EARL outcomes (W3C standard) ────────────────────────────────
 #
@@ -58,11 +59,29 @@ import re
 # translate to user-friendly names at the report/display layer.
 #
 # Reference: https://www.w3.org/TR/EARL10-Schema/#outcome
+#
+# `EARL` is a StrEnum so its members compare equal to their string
+# values.  Code like `result['failed']` and `result[EARL.FAILED]`
+# both work — JSON serialization, dict lookups, and string concat
+# all behave like raw strings.  The module-level `EARL_FAILED`
+# etc. constants remain as aliases for the existing call sites
+# (300+ across the codebase).
 
-EARL_FAILED = 'failed'           # Definite accessibility failure
-EARL_CANTTELL = 'cantTell'       # Needs manual review
-EARL_PASSED = 'passed'           # Test passed
-EARL_INAPPLICABLE = 'inapplicable'  # Test does not apply
+
+class EARL(StrEnum):
+    """W3C EARL 1.0 outcome values."""
+
+    FAILED = 'failed'                # Definite accessibility failure
+    CANTTELL = 'cantTell'             # Needs manual review
+    PASSED = 'passed'                 # Test passed
+    INAPPLICABLE = 'inapplicable'     # Test does not apply
+
+
+# Aliases — existing modules import these by name.
+EARL_FAILED = EARL.FAILED
+EARL_CANTTELL = EARL.CANTTELL
+EARL_PASSED = EARL.PASSED
+EARL_INAPPLICABLE = EARL.INAPPLICABLE
 
 # EARL → user-friendly display names (CLI output, HTML reports)
 EARL_TO_DISPLAY = {
@@ -520,7 +539,7 @@ def htmlcs_code_to_sc(code):
     """
     m = re.search(r'(\d+)_(\d+)_(\d+)', code)
     if m:
-        return '{}.{}.{}'.format(m.group(1), m.group(2), m.group(3))
+        return f'{m.group(1)}.{m.group(2)}.{m.group(3)}'
     return None
 
 
@@ -864,11 +883,11 @@ if __name__ == '__main__':
             if new_rules:
                 print("NEW rules (add to IBM_SC_MAP):")
                 for r in sorted(new_rules):
-                    print("  '{}': {},".format(r, live[r]))
+                    print(f"  '{r}': {live[r]},")
             if removed:
                 print("REMOVED rules (delete from IBM_SC_MAP):")
                 for r in sorted(removed):
-                    print("  '{}'".format(r))
+                    print(f"  '{r}'")
             if changed:
                 print("CHANGED rules:")
                 for r in sorted(changed):

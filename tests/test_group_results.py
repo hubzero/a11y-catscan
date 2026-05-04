@@ -45,7 +45,7 @@ def grouped_jsonl(jsonl_factory, make_finding, make_page):
 
 class TestGroupResults:
     def test_group_by_rule(self, cli, capsys, grouped_jsonl):
-        cli._group_results(grouped_jsonl, 'rule')
+        cli.group_results(grouped_jsonl, 'rule')
         out = capsys.readouterr().out
         # Header indicates how many groups
         assert 'Grouped by rule' in out
@@ -57,7 +57,7 @@ class TestGroupResults:
         assert 'bp-landmarks' in out
 
     def test_group_by_wcag(self, cli, capsys, grouped_jsonl):
-        cli._group_results(grouped_jsonl, 'wcag')
+        cli.group_results(grouped_jsonl, 'wcag')
         out = capsys.readouterr().out
         assert 'Grouped by wcag' in out
         # The SC numbers from sc-* tags appear
@@ -65,7 +65,7 @@ class TestGroupResults:
         assert '4.1.2' in out
 
     def test_group_by_color(self, cli, capsys, grouped_jsonl):
-        cli._group_results(grouped_jsonl, 'color')
+        cli.group_results(grouped_jsonl, 'color')
         out = capsys.readouterr().out
         # Findings with foreground/background info get parsed into
         # the "fg on bg" key; the gradient one is "(no color info)"
@@ -73,12 +73,12 @@ class TestGroupResults:
 
     def test_group_by_reason_extracts_gradient(
             self, cli, capsys, grouped_jsonl):
-        cli._group_results(grouped_jsonl, 'reason')
+        cli.group_results(grouped_jsonl, 'reason')
         out = capsys.readouterr().out
         assert 'background gradient' in out
 
     def test_group_by_level(self, cli, capsys, grouped_jsonl):
-        cli._group_results(grouped_jsonl, 'level')
+        cli.group_results(grouped_jsonl, 'level')
         out = capsys.readouterr().out
         # SC 1.4.3 is WCAG 2.0 AA; 4.1.2 is WCAG 2.0 A
         assert 'WCAG 2.0 AA' in out
@@ -87,14 +87,14 @@ class TestGroupResults:
         assert 'Best Practice' in out
 
     def test_group_by_engine(self, cli, capsys, grouped_jsonl):
-        cli._group_results(grouped_jsonl, 'engine')
+        cli.group_results(grouped_jsonl, 'engine')
         out = capsys.readouterr().out
         assert 'Grouped by engine' in out
         # Single-engine findings show 'axe'
         assert 'axe' in out
 
     def test_group_by_bp(self, cli, capsys, grouped_jsonl):
-        cli._group_results(grouped_jsonl, 'bp')
+        cli.group_results(grouped_jsonl, 'bp')
         out = capsys.readouterr().out
         assert 'Grouped by bp' in out
         # bp-landmarks is the only bp-* tag in the fixture
@@ -102,7 +102,7 @@ class TestGroupResults:
 
     def test_unknown_group_falls_back_to_rule(
             self, cli, capsys, grouped_jsonl):
-        cli._group_results(grouped_jsonl, 'something-unknown')
+        cli.group_results(grouped_jsonl, 'something-unknown')
         out = capsys.readouterr().out
         # Falls through to the default branch — keys are deduped rule
         # ids (i.e. the primary tags after dedup_page).
@@ -111,6 +111,6 @@ class TestGroupResults:
     def test_empty_jsonl_prints_zero_groups(
             self, cli, capsys, jsonl_factory):
         empty = jsonl_factory([])
-        cli._group_results(empty, 'rule')
+        cli.group_results(empty, 'rule')
         out = capsys.readouterr().out
         assert '0 nodes in 0 groups' in out

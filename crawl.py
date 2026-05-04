@@ -26,11 +26,12 @@ import signal
 import sys
 import time
 from collections import deque
+from pathlib import Path
 
 from engine_mappings import (
     EARL_FAILED, EARL_CANTTELL, EARL_PASSED, EARL_INAPPLICABLE)
 from scanner import Scanner, WCAG_LEVELS, DEFAULT_LEVEL
-from results import count_nodes, dedup_page
+from results import RunningTotals, count_nodes, dedup_page
 from engines.axe import get_axe_version
 from allowlist import classify_page
 from report_html import generate_html_report
@@ -43,19 +44,37 @@ from crawl_utils import (
 )
 
 
-def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
-                   level=None,
-                   include_paths=None, exclude_paths=None,
-                   exclude_regex=None,
-                   verbose=False, quiet=False, config=None,
-                   json_path=None, html_path=None, save_every=25,
-                   level_label=None, allowlist=None, seed_urls=None,
-                   robots_parser=None, resume_state=None):
+def crawl_and_scan(
+    start_url: str,
+    max_pages: int = 50,
+    tags: list[str] | None = None,
+    rules: list[str] | None = None,
+    level: str | None = None,
+    include_paths: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
+    exclude_regex: list | None = None,
+    verbose: bool = False,
+    quiet: bool = False,
+    config: dict | None = None,
+    json_path: str | None = None,
+    html_path: str | None = None,
+    save_every: int = 25,
+    level_label: str | None = None,
+    allowlist=None,
+    seed_urls: list[str] | None = None,
+    robots_parser=None,
+    resume_state: dict | None = None,
+) -> tuple:
     """Crawl the site starting from start_url and scan each page.
 
     If json_path is provided, results are flushed to disk every
     `save_every` pages and on SIGTERM/SIGINT so partial runs preserve
     progress.
+
+    Returns:
+        (page_count, jsonl_path, wall_time, total_page_time, totals)
+        where `totals` is a dict with wcag/aria/bp/incomplete/rules
+        accumulated during the crawl.
     """
     config = config or {}
 
@@ -95,7 +114,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
             # anything else.
             with open('/proc/self/oom_score_adj', 'w') as f:
                 f.write(str(oom_score))
-        except (IOError, PermissionError):
+        except (OSError, PermissionError):
             pass  # not on Linux or no permission — harmless
 
     page_wait = safe_int(config.get('page_wait', 1), 1)
@@ -182,10 +201,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
 
     # Running counters populated by _write_page so main() doesn't
     # have to re-iterate the JSONL just to compute the summary.
-    running_totals = {
-        'wcag': 0, 'aria': 0, 'bp': 0,
-        'incomplete': 0, 'rules': set(),
-    }
+    running_totals = RunningTotals()
 
     # MEMORY STRATEGY: Stream results to a JSONL file (one JSON
     # object per line) instead of accumulating everything in a
@@ -205,11 +221,11 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
     if not quiet:
         print("Starting axe-core {} accessibility scan...".format(
             get_axe_version()))
-        print("  Start URL: {}".format(start_url))
+        print(f"  Start URL: {start_url}")
         print("  Level: {} ({})".format(level_label, ', '.join(tags)))
-        print("  Max pages: {}".format(max_pages))
+        print(f"  Max pages: {max_pages}")
         if page_wait > 1:
-            print("  Page wait: {}s".format(page_wait))
+            print(f"  Page wait: {page_wait}s")
         if json_path and save_every:
             print("  Incremental save every {} pages".format(
                 save_every))
@@ -235,7 +251,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
             # flush per page so SIGUSR1 snapshots and concurrent
             # readers see fully-written lines.
             jsonl_file.flush()
-        except (IOError, OSError) as e:
+        except OSError as e:
             print("  WARNING: failed to write results for {}: {}".format(
                 url, e), file=sys.stderr)
 
@@ -267,7 +283,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
                         out.write(',\n')
                     json_key = json.dumps(page_url)
                     json_val = json.dumps(page_data, default=str)
-                    out.write('  {}: {}'.format(json_key, json_val))
+                    out.write(f'  {json_key}: {json_val}')
                     first_entry = False
                 out.write('\n}\n')
             os.replace(tmp, json_path)
@@ -283,7 +299,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
                 print('  [flushed {} pages ({})]'.format(
                     page_count, reason))
         except Exception as e:
-            print('  (flush failed: {})'.format(e))
+            print(f'  (flush failed: {e})')
 
     # Rate limiter shared across all workers to enforce robots.txt
     # crawl delay.  This is separate from page_wait (which is
@@ -300,7 +316,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
     def _vskip(url, reason):
         """Print a skip notice in verbose mode."""
         if verbose and not quiet:
-            print("  skip: {} — {}".format(url, reason))
+            print(f"  skip: {url} — {reason}")
 
     # SIGTERM/SIGINT handler: flush partial results and save state.
     interrupted = False
@@ -313,7 +329,10 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
         """
         if not json_path or no_crawl or not queue:
             return
-        state_path = json_path.replace('.json', '.state.json')
+        # Path.with_suffix is correct here because it only swaps the
+        # final extension — `json_path.replace('.json', ...)` would
+        # corrupt paths whose directory components contain '.json'.
+        state_path = str(Path(json_path).with_suffix('.state.json'))
         tmp_path = state_path + '.tmp'
         old_path = state_path + '.old'
         try:
@@ -360,7 +379,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
                     "{} visited)".format(
                         state_path, len(queue), len(visited)))
         except Exception as e:
-            print("  (state save failed: {})".format(e))
+            print(f"  (state save failed: {e})")
             # Clean up temp on failure, leave current intact
             try:
                 os.unlink(tmp_path)
@@ -378,7 +397,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
         interrupted = True
         print('\n!! Signal {} — flushing {} pages...'.format(
             signum, page_count))
-        _flush(reason='signal {}'.format(signum))
+        _flush(reason=f'signal {signum}')
         _save_state()
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
@@ -400,7 +419,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
     restart_every = safe_int(config.get('restart_every', 500), 500)
 
     if not quiet and num_workers > 1:
-        print("  Workers: {} (parallel)".format(num_workers))
+        print(f"  Workers: {num_workers} (parallel)")
 
     try:
         # --- Playwright async sliding window ---
@@ -670,7 +689,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
                                 parts = []
                                 if v_count:
                                     parts.append(
-                                        '{} failed'.format(v_count))
+                                        f'{v_count} failed')
                                 if i_count:
                                     parts.append(
                                         '{} cantTell'.format(
@@ -830,7 +849,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
         except (KeyboardInterrupt, SystemExit):
             cleanup_browsers()
         except Exception as e:
-            print("  Playwright error: {}".format(e),
+            print(f"  Playwright error: {e}",
                   file=sys.stderr)
             cleanup_browsers()
 
@@ -839,7 +858,7 @@ def crawl_and_scan(start_url, max_pages=50, tags=None, rules=None,
         if jsonl_file is not None:
             try:
                 jsonl_file.close()
-            except (IOError, OSError):
+            except OSError:
                 pass
         _flush(reason='final')
         _save_state()

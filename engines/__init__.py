@@ -47,7 +47,7 @@ def make_engine(name, scan_level, *, verbose=False, quiet=False, **extras):
     """
     cls = ENGINES.get(name)
     if cls is None:
-        raise ValueError("Unknown engine: {}".format(name))
+        raise ValueError(f"Unknown engine: {name}")
     accepted = _EXTRA_KWARGS.get(name, ())
     kwargs = {k: extras[k] for k in accepted if k in extras}
     return cls(scan_level, verbose=verbose, quiet=quiet, **kwargs)

@@ -20,7 +20,7 @@ class TestIterJsonl:
         path.write_text(
             json.dumps({'http://a/': {'failed': []}}) + '\n' +
             json.dumps({'http://b/': {'failed': []}}) + '\n')
-        urls = [u for u, _ in cli._iter_jsonl(str(path))]
+        urls = [u for u, _ in cli.iter_jsonl(str(path))]
         assert urls == ['http://a/', 'http://b/']
 
     def test_skips_corrupt_lines_with_warning(self, cli, tmp_path,
@@ -30,7 +30,7 @@ class TestIterJsonl:
             json.dumps({'http://a/': {}}) + '\n' +
             'not json\n' +
             json.dumps({'http://b/': {}}) + '\n')
-        urls = [u for u, _ in cli._iter_jsonl(str(path))]
+        urls = [u for u, _ in cli.iter_jsonl(str(path))]
         assert urls == ['http://a/', 'http://b/']
         captured = capsys.readouterr()
         # CLI emits a warning to stderr for corrupt lines
@@ -42,7 +42,7 @@ class TestIterJsonl:
         path.write_text(
             '\n\n' +
             json.dumps({'http://a/': {}}) + '\n')
-        records = list(cli._iter_jsonl(str(path)))
+        records = list(cli.iter_jsonl(str(path)))
         assert len(records) == 1
 
 
@@ -53,7 +53,7 @@ class TestIterReport:
         path = tmp_path / 'r.jsonl'
         path.write_text(
             json.dumps({'http://a/': {'failed': []}}) + '\n')
-        records = list(cli._iter_report(str(path)))
+        records = list(cli.iter_report(str(path)))
         assert len(records) == 1
         assert records[0][0] == 'http://a/'
 
@@ -64,7 +64,7 @@ class TestIterReport:
             'http://a/': {'failed': []},
             'http://b/': {'failed': []},
         }))
-        records = sorted(cli._iter_report(str(path)))
+        records = sorted(cli.iter_report(str(path)))
         urls = [u for u, _ in records]
         assert urls == ['http://a/', 'http://b/']
 
@@ -75,7 +75,7 @@ class TestIterReport:
         path.write_text(
             json.dumps({'http://a/': {}}) + '\n' +
             json.dumps({'http://b/': {}}) + '\n')
-        records = list(cli._iter_report(str(path)))
+        records = list(cli.iter_report(str(path)))
         assert {u for u, _ in records} == {'http://a/', 'http://b/'}
 
 
@@ -92,7 +92,7 @@ class TestIterDeduped:
         page = make_page('http://a/', failed=[a, b])
         path = jsonl_factory([('http://a/', page)])
 
-        records = list(cli._iter_deduped(path))
+        records = list(cli.iter_deduped(path))
         assert len(records) == 1
         url, data = records[0]
         assert len(data[EARL_FAILED]) == 1
@@ -113,7 +113,7 @@ class TestExtractUrlsFromReport:
             json.dumps({'http://clean/': clean}) + '\n' +
             json.dumps({'http://broken/': broken}) + '\n')
 
-        urls = cli._extract_urls_from_report(str(path))
+        urls = cli.extract_urls_from_report(str(path))
         assert urls == ['http://broken/']
 
     def test_supports_cant_tell_filter(
@@ -128,11 +128,11 @@ class TestExtractUrlsFromReport:
         path.write_text(
             json.dumps({'http://review/': page}) + '\n')
 
-        urls = cli._extract_urls_from_report(
+        urls = cli.extract_urls_from_report(
             str(path), which=EARL_CANTTELL)
         assert urls == ['http://review/']
 
     def test_empty_report_returns_empty(self, cli, tmp_path):
         path = tmp_path / 'r.jsonl'
         path.write_text('')
-        assert cli._extract_urls_from_report(str(path)) == []
+        assert cli.extract_urls_from_report(str(path)) == []

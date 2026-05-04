@@ -26,7 +26,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 
 
@@ -191,7 +191,6 @@ def normalize_url(url):
     # Build the set of params to strip for this URL
     query = parsed.query
     if query and (_strip_params or _strip_path_rules_compiled):
-        from urllib.parse import parse_qs, urlencode
         strip = set(_strip_params)
         for regex, param_set in _strip_path_rules_compiled:
             if regex.search(path):

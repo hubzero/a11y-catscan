@@ -263,7 +263,7 @@ class AlfaEngine(Engine):
             import re
             m = re.search(r'wcag(\d)(\d)', self.scan_level)
             if m:
-                max_version = '{}.{}'.format(m.group(1), m.group(2))
+                max_version = f'{m.group(1)}.{m.group(2)}'
         init_msg = json.dumps({
             'level': level,
             'maxVersion': max_version,
@@ -368,7 +368,7 @@ class AlfaEngine(Engine):
                     })
         except Exception as e:
             if self.verbose and not self.quiet:
-                print("  alfa error: {}".format(e))
+                print(f"  alfa error: {e}")
 
         return out
 

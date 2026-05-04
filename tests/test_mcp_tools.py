@@ -118,15 +118,19 @@ class TestListEngines:
             self, monkeypatch, tmp_path):
         # If axe.min.js is unreadable (e.g. node_modules missing),
         # get_axe_version should swallow the IOError and return
-        # the 'not installed' sentinel instead of crashing.
-        # Patch the cached path + reset the version cache so the
-        # next call re-reads through the missing path.
+        # the 'not installed' sentinel instead of crashing.  Patch
+        # the path and clear the @functools.cache so the next call
+        # re-reads through the missing path.
         from engines import axe as axe_mod
         monkeypatch.setattr(
             axe_mod, 'AXE_JS_PATH',
             str(tmp_path / 'nope.min.js'))
-        monkeypatch.setattr(axe_mod, '_AXE_VERSION', None)
-        assert axe_mod.get_axe_version() == 'not installed'
+        axe_mod.get_axe_version.cache_clear()
+        try:
+            assert axe_mod.get_axe_version() == 'not installed'
+        finally:
+            # Reset the cache so subsequent tests see a real version.
+            axe_mod.get_axe_version.cache_clear()
 
 
 # ── analyze_report ─────────────────────────────────────────────

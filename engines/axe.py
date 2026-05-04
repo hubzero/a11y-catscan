@@ -54,38 +54,35 @@ Rules:
     mapping and WCAG SC references.
 """
 
+import functools
 import os
 import re
 import sys
 
 from .base import Engine, SCRIPT_DIR, NODE_MODULES
+from engine_mappings import (
+    bp_category, aria_category,
+    EARL_FAILED, EARL_CANTTELL, EARL_PASSED, EARL_INAPPLICABLE)
+
 
 # Bundled axe-core JS path (constant relative to node_modules).
 AXE_JS_PATH = os.path.join(NODE_MODULES, 'axe-core', 'axe.min.js')
 
-_AXE_VERSION = None
 
-
+@functools.cache
 def get_axe_version():
     """Read the bundled axe-core version from its JS header.
 
     Cached after first call.  Returns 'unknown' if the file is
     present but unparseable; 'not installed' if missing.
     """
-    global _AXE_VERSION
-    if _AXE_VERSION is not None:
-        return _AXE_VERSION
     try:
-        with open(AXE_JS_PATH, 'r') as f:
+        with open(AXE_JS_PATH) as f:
             header = f.read(200)
         m = re.search(r'axe v([\d.]+)', header)
-        _AXE_VERSION = m.group(1) if m else 'unknown'
-    except (IOError, OSError):
-        _AXE_VERSION = 'not installed'
-    return _AXE_VERSION
-from engine_mappings import (
-    bp_category, aria_category,
-    EARL_FAILED, EARL_CANTTELL, EARL_PASSED, EARL_INAPPLICABLE)
+        return m.group(1) if m else 'unknown'
+    except OSError:
+        return 'not installed'
 
 
 _AXE_SC_TAG_RE = re.compile(r'^wcag(\d)(\d)(\d+)$')
@@ -251,11 +248,11 @@ class AxeEngine(Engine):
 
     async def start(self, browser=None):
         if not os.path.exists(AXE_JS_PATH):
-            print("ERROR: axe-core not found at {}".format(AXE_JS_PATH),
+            print(f"ERROR: axe-core not found at {AXE_JS_PATH}",
                   file=sys.stderr)
             print("Run: npm install", file=sys.stderr)
             raise FileNotFoundError(AXE_JS_PATH)
-        with open(AXE_JS_PATH, 'r') as f:
+        with open(AXE_JS_PATH) as f:
             self._source = f.read()
 
         # Build run options — rules override tags
@@ -280,7 +277,7 @@ class AxeEngine(Engine):
         if not axe_results or 'error' in axe_results:
             err = (axe_results or {}).get('error', 'unknown error')
             if self.verbose and not self.quiet:
-                print("  axe error: {}".format(err))
+                print(f"  axe error: {err}")
             return []
 
         # Map axe result categories to EARL outcomes

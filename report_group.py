@@ -45,7 +45,7 @@ def group_results(jsonl_path, group_by, allowlist=None):
 
                     # Determine group key
                     if group_by == 'rule':
-                        key = '{} ({})'.format(rule_id, category[:3])
+                        key = f'{rule_id} ({category[:3]})'
                     elif group_by == 'selector':
                         # Normalize: strip IDs, nth-child numbers
                         key = re.sub(
@@ -88,7 +88,7 @@ def group_results(jsonl_path, group_by, allowlist=None):
                         scs = parse_wcag_sc(tags)
                         if scs:
                             lvl, ver = sc_level(next(iter(scs)))
-                            key = 'WCAG {} {}'.format(ver, lvl)
+                            key = f'WCAG {ver} {lvl}'
                         elif 'best-practice' in tags:
                             key = 'Best Practice'
                         else:
@@ -129,7 +129,7 @@ def group_results(jsonl_path, group_by, allowlist=None):
     for key, count in groups.most_common():
         pages = len(group_pages[key])
         ex = group_examples[key]
-        print("  {:>5d}  {} ({} pages)".format(count, key, pages))
+        print(f"  {count:>5d}  {key} ({pages} pages)")
         if group_by != 'rule':
             print("         rule: {}".format(ex['rule']))
         print("         e.g. {}".format(ex['url']))

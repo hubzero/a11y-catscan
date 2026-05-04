@@ -19,6 +19,8 @@ Result-dict shape (see `engines/base.py` for the per-finding format):
     }
 """
 
+from dataclasses import dataclass, field
+
 from engine_mappings import (
     EARL_FAILED, EARL_CANTTELL, EARL_PASSED, EARL_INAPPLICABLE)
 
@@ -26,6 +28,29 @@ from engine_mappings import (
 # Impact severity ranking — higher number wins when merging duplicate
 # findings across engines.
 _IMPACT_RANK = {'critical': 4, 'serious': 3, 'moderate': 2, 'minor': 1}
+
+
+@dataclass
+class RunningTotals:
+    """Per-scan finding counters accumulated during the crawl.
+
+    `crawl_and_scan` increments these in `_write_page` after each
+    page lands so main() can render the post-scan summary without
+    re-iterating the JSONL.  Counts are *node* counts (not
+    finding counts) — a single rule violation that hits 12
+    elements contributes 12 to the relevant bucket.
+
+    Classification priority (applied in `allowlist.classify_page`):
+    a finding with an `aria-*` primary tag is counted under
+    `aria` even if it also has an `sc-*` tag, because IBM
+    mis-maps several ARIA-naming rules to SC 2.4.1 and we don't
+    want those to inflate the WCAG count.
+    """
+    wcag: int = 0
+    aria: int = 0
+    bp: int = 0
+    incomplete: int = 0
+    rules: set = field(default_factory=set)
 
 
 def count_nodes(result_list):

@@ -64,7 +64,7 @@ def _render_nodes_html(nodes, limit=20, snippet_max=500):
         if messages:
             parts.append('<ul>')
             for msg in messages[:5]:
-                parts.append('<li>{}</li>'.format(_esc(msg)))
+                parts.append(f'<li>{_esc(msg)}</li>')
             parts.append('</ul>')
         parts.append('</div>')
     if len(nodes) > limit:
@@ -164,7 +164,30 @@ def generate_html_report(jsonl_path, output_path, start_url,
     # Stream-write directly to disk instead of accumulating fragments
     # in a list (a 5000-page scan would otherwise hold hundreds of MB
     # of HTML in RAM before flushing).  `w(s)` writes one fragment.
+    # try/finally ensures the file handle is closed even if the
+    # render raises mid-stream.
     out = open(output_path, 'w')
+    try:
+        _render_html_report(
+            out, now, axe_ver, start_url, level_label,
+            total_pages, total_violations, total_violation_nodes,
+            total_incomplete_nodes, total_suppressed,
+            impact_counts, rule_summary, incomplete_summary,
+            wcag_criteria, sorted_rules, sorted_incomplete,
+            jsonl_path, allowlist)
+    finally:
+        out.close()
+
+
+def _render_html_report(out, now, axe_ver, start_url, level_label,
+                        total_pages, total_violations,
+                        total_violation_nodes,
+                        total_incomplete_nodes, total_suppressed,
+                        impact_counts, rule_summary,
+                        incomplete_summary, wcag_criteria,
+                        sorted_rules, sorted_incomplete,
+                        jsonl_path, allowlist):
+    """Write the HTML report body, given pre-computed aggregates."""
 
     def w(s):
         out.write(s)
@@ -359,7 +382,7 @@ def generate_html_report(jsonl_path, output_path, start_url,
 
         for v in violations:
             impact = v.get('impact', 'unknown')
-            w('<div class="rule-card impact-{}">'.format(impact))
+            w(f'<div class="rule-card impact-{impact}">')
             w('<strong><span class="badge badge-{}">{}</span> '
               '<a href="{}">{}</a></strong>'.format(
                   impact, impact.capitalize(),
@@ -371,7 +394,7 @@ def generate_html_report(jsonl_path, output_path, start_url,
             if wcag_tags:
                 w('<p class="wcag-ref">WCAG: {}</p>'.format(
                     ' '.join(
-                        '<span class="tag">{}</span>'.format(_esc(t))
+                        f'<span class="tag">{_esc(t)}</span>'
                         for t in wcag_tags)))
             w(_render_nodes_html(v.get('nodes', []), limit=20))
             w('</div>')
@@ -392,7 +415,7 @@ def generate_html_report(jsonl_path, output_path, start_url,
         w('</div>')
 
     if clean_pages:
-        w('<h2>Fully Clean Pages ({})'.format(len(clean_pages)))
+        w(f'<h2>Fully Clean Pages ({len(clean_pages)})')
         w('</h2><ul>')
         for url in clean_pages:
             w('<li><a href="{}">{}</a></li>'.format(
@@ -400,4 +423,3 @@ def generate_html_report(jsonl_path, output_path, start_url,
         w('</ul>')
 
     w('</body></html>')
-    out.close()

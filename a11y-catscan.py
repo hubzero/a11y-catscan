@@ -86,26 +86,20 @@ from crawl_utils import (
 # WCAG_LEVELS and DEFAULT_LEVEL imported from scanner.py
 
 
-# Backward-compat alias — closures inside crawl_and_scan and the
-# report helpers still reference these underscore-prefixed names.
-_safe_int = crawl_utils.safe_int  # noqa: F811
-_count_nodes = count_nodes
-
-
-# Backward-compat aliases for closures inside _group_results and the
-# report generators, which historically referenced the underscore
-# prefixed names.  parse_wcag_sc and sc_level live in engine_mappings.
-_parse_wcag_sc = parse_wcag_sc
-_sc_level = sc_level
-
-
-# Allowlist parsing/matching lives in allowlist.py.  Underscore aliases
-# are kept for the closures and tests that reference the old names.
-from allowlist import (
-    load_allowlist,
-    matches_allowlist as _matches_allowlist,
-    classify_page as _classify_page,
-)
+# Re-export the helper modules' public surface so tests and external
+# integrations that drive the CLI by importing this script continue
+# to find them all in one place.  The underscore-prefixed alias
+# layer this used to carry was a refactor artefact and is gone.
+from allowlist import (load_allowlist, matches_allowlist,
+                       classify_page)
+from crawl import crawl_and_scan  # noqa: F401
+from crawl_utils import safe_int, register_browser_pid, cleanup_browsers
+from report_io import (iter_jsonl, iter_report, iter_deduped,
+                       extract_urls_from_report)
+from report_html import generate_html_report  # noqa: F401
+from report_llm import generate_llm_report  # noqa: F401
+from report_group import group_results
+from report_diff import print_diff  # noqa: F401
 
 
 def load_config(config_path=None):
@@ -119,34 +113,6 @@ def load_config(config_path=None):
         with open(path) as f:
             config = yaml.safe_load(f) or {}
     return config
-
-
-# Browser process cleanup moved to crawl_utils (atexit registered there).
-_register_browser_pid = crawl_utils.register_browser_pid
-_cleanup_browsers = crawl_utils.cleanup_browsers
-
-
-# The crawl loop lives in crawl.py.
-from crawl import crawl_and_scan  # noqa: F401
-
-
-
-# JSONL/JSON streaming readers live in report_io.  Underscore aliases
-# are kept here so existing closures and tests that reference the
-# leading-underscore names keep working.
-from report_io import (
-    iter_jsonl as _iter_jsonl,
-    iter_report as _iter_report,
-    iter_deduped as _iter_deduped,
-    extract_urls_from_report as _extract_urls_from_report,
-)
-
-
-# Report generators all live in their own modules now.
-from report_html import generate_html_report  # noqa: F401
-from report_llm import generate_llm_report  # noqa: F401
-from report_group import group_results as _group_results  # noqa: F401
-from report_diff import print_diff  # noqa: F401
 
 
 def main():
@@ -291,42 +257,42 @@ def main():
     seed_urls = None
     if args.rescan:
         if not os.path.exists(args.rescan):
-            parser.error('Rescan file not found: {}'.format(args.rescan))
+            parser.error(f'Rescan file not found: {args.rescan}')
         seed_urls = []
-        for prev_url, prev_data in _iter_jsonl(args.rescan):
+        for prev_url, prev_data in iter_jsonl(args.rescan):
             if prev_data.get(EARL_FAILED) or prev_data.get(EARL_CANTTELL):
                 seed_urls.append(prev_url)
         if not seed_urls:
             print("No failures in previous scan — nothing to rescan.")
             sys.exit(0)
-        print("Rescanning {} pages with previous failures".format(len(seed_urls)))
+        print(f"Rescanning {len(seed_urls)} pages with previous failures")
     if args.violations_from:
         if not os.path.exists(args.violations_from):
-            parser.error('Report not found: {}'.format(args.violations_from))
-        seed_urls = _extract_urls_from_report(args.violations_from, EARL_FAILED)
+            parser.error(f'Report not found: {args.violations_from}')
+        seed_urls = extract_urls_from_report(args.violations_from, EARL_FAILED)
         if not seed_urls:
             print("No failures in previous report — nothing to rescan.")
             sys.exit(0)
-        print("Rescanning {} pages with previous failures".format(len(seed_urls)))
+        print(f"Rescanning {len(seed_urls)} pages with previous failures")
         if not url:
             url = seed_urls[0]
     if args.incompletes_from:
         if not os.path.exists(args.incompletes_from):
-            parser.error('Report not found: {}'.format(args.incompletes_from))
-        seed_urls = _extract_urls_from_report(args.incompletes_from, EARL_CANTTELL)
+            parser.error(f'Report not found: {args.incompletes_from}')
+        seed_urls = extract_urls_from_report(args.incompletes_from, EARL_CANTTELL)
         if not seed_urls:
             print("No incompletes in previous report — nothing to rescan.")
             sys.exit(0)
-        print("Rescanning {} pages with previous incompletes".format(len(seed_urls)))
+        print(f"Rescanning {len(seed_urls)} pages with previous incompletes")
         if not url:
             url = seed_urls[0]
     if args.urls:
         if not os.path.exists(args.urls):
-            parser.error('URL file not found: {}'.format(args.urls))
+            parser.error(f'URL file not found: {args.urls}')
         with open(args.urls) as f:
             seed_urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
         if not seed_urls:
-            parser.error('No URLs found in {}'.format(args.urls))
+            parser.error(f'No URLs found in {args.urls}')
         if not url:
             url = seed_urls[0]
 
@@ -336,7 +302,7 @@ def main():
     elif seed_urls:
         max_pages = len(seed_urls)
     else:
-        max_pages = args.max_pages or _safe_int(config.get('max_pages', 50), 50)
+        max_pages = args.max_pages or safe_int(config.get('max_pages', 50), 50)
 
     # Resolve exclude paths: config defaults + CLI additions
     exclude_paths = []
@@ -359,7 +325,7 @@ def main():
             try:
                 exclude_regex.append(re.compile(pattern))
             except re.error as e:
-                print("WARNING: invalid exclude_regex '{}': {}".format(pattern, e),
+                print(f"WARNING: invalid exclude_regex '{pattern}': {e}",
                       file=sys.stderr)
 
     # Query parameters to strip from URLs during normalization.
@@ -388,7 +354,7 @@ def main():
     crawl_utils.configure_strip_rules(strip_global, strip_path_rules)
 
     # Resolve output
-    save_every = args.save_every or _safe_int(config.get('save_every', 25), 25)
+    save_every = args.save_every or safe_int(config.get('save_every', 25), 25)
 
     # Workers: number of parallel browser instances
     if args.workers:
@@ -417,7 +383,7 @@ def main():
     allowlist_path = args.allowlist or config.get('allowlist')
     allowlist = load_allowlist(allowlist_path) if allowlist_path else []
     if allowlist:
-        print("Allowlist: {} entries from {}".format(len(allowlist), allowlist_path))
+        print(f"Allowlist: {len(allowlist)} entries from {allowlist_path}")
 
     # Load robots.txt unless told to ignore it.
     # By default we respect robots.txt — it's polite and often excludes
@@ -440,9 +406,9 @@ def main():
             with open(args.resume) as f:
                 resume_state = json.load(f)
             if not args.quiet:
-                print("Resuming from: {}".format(args.resume))
+                print(f"Resuming from: {args.resume}")
         except Exception as e:
-            print("ERROR: cannot load state file: {}".format(e),
+            print(f"ERROR: cannot load state file: {e}",
                   file=sys.stderr)
             sys.exit(2)
 
@@ -470,26 +436,26 @@ def main():
     )
 
     # Final reports already flushed by crawl_and_scan
-    print("\nJSON report: {}".format(json_path))
-    print("HTML report: {}".format(html_path))
+    print(f"\nJSON report: {json_path}")
+    print(f"HTML report: {html_path}")
 
     if args.llm and jsonl_path and os.path.exists(jsonl_path):
         llm_path = os.path.join(output_dir, basename + '.md')
         generate_llm_report(jsonl_path, llm_path, url,
                             level_label=level_label, allowlist=allowlist,
                             config=config)
-        print("LLM report: {}".format(llm_path))
+        print(f"LLM report: {llm_path}")
 
     # Summary totals were accumulated during the crawl by _write_page;
     # no second pass over the JSONL needed.  --level controls whether
     # bp-*/aria-* failures count toward the compliance number.
     scan_level_used = args.level or config.get('level', DEFAULT_LEVEL)
     include_bp_in_count = (scan_level_used == 'best')
-    total_wcag_failed = totals['wcag']
-    total_aria_failed = totals['aria']
-    total_bp_failed = totals['bp']
-    total_incomplete = totals['incomplete']
-    violation_rules = totals['rules']
+    total_wcag_failed = totals.wcag
+    total_aria_failed = totals.aria
+    total_bp_failed = totals.bp
+    total_incomplete = totals.incomplete
+    violation_rules = totals.rules
 
     # Compliance count: WCAG only, unless --level best
     compliance_failed = total_wcag_failed
@@ -499,11 +465,11 @@ def main():
     throughput = (wall_time / scanned) if scanned else 0
     print("\nScan complete: {} pages in {:.1f}s ({:.1f}s/page)".format(
         scanned, wall_time, throughput))
-    print("  WCAG failed: {} node(s)".format(total_wcag_failed))
+    print(f"  WCAG failed: {total_wcag_failed} node(s)")
     if total_aria_failed:
-        print("  ARIA: {} node(s)".format(total_aria_failed))
+        print(f"  ARIA: {total_aria_failed} node(s)")
     if total_bp_failed:
-        print("  Best practice: {} node(s)".format(total_bp_failed))
+        print(f"  Best practice: {total_bp_failed} node(s)")
     print("  Can't tell: {} node(s) needing manual review".format(
         total_incomplete))
 
@@ -543,14 +509,14 @@ def main():
     # Diff against previous scan
     if args.diff and jsonl_path and os.path.exists(jsonl_path):
         if os.path.exists(args.diff):
-            print("\nDiff vs {}:".format(args.diff))
+            print(f"\nDiff vs {args.diff}:")
             print_diff(args.diff, jsonl_path, allowlist=allowlist)
         else:
-            print("\nWARNING: diff file not found: {}".format(args.diff))
+            print(f"\nWARNING: diff file not found: {args.diff}")
 
     # Group-by summary
     if args.group_by and jsonl_path and os.path.exists(jsonl_path):
-        _group_results(jsonl_path, args.group_by, allowlist=allowlist)
+        group_results(jsonl_path, args.group_by, allowlist=allowlist)
 
     # Exit code: 0 = clean, 1 = violations found
     if compliance_failed > 0:

@@ -176,12 +176,22 @@ class Scanner:
     internally via asyncio.Lock.
     """
 
-    def __init__(self, engines=None, *, level=DEFAULT_LEVEL,
-                 tags=None, rules=None,
-                 chromium_path=None, ignore_certificate_errors=False,
-                 wait_until='networkidle', page_wait=1,
-                 auth=None, config=None,
-                 verbose=False, quiet=False):
+    def __init__(
+        self,
+        engines: list[str] | None = None,
+        *,
+        level: str = DEFAULT_LEVEL,
+        tags: list[str] | None = None,
+        rules: list[str] | None = None,
+        chromium_path: str | None = None,
+        ignore_certificate_errors: bool = False,
+        wait_until: str = 'networkidle',
+        page_wait: int = 1,
+        auth: dict | None = None,
+        config: dict | None = None,
+        verbose: bool = False,
+        quiet: bool = False,
+    ) -> None:
         # Scan configuration
         self._engine_names = engines or ['axe']
         self._scan_level = level
@@ -219,15 +229,15 @@ class Scanner:
         self._started = False
 
     @property
-    def is_started(self):
+    def is_started(self) -> bool:
         return self._started
 
     @property
-    def engine_names(self):
+    def engine_names(self) -> list[str]:
         return [type(e).__name__ for e in self._engines]
 
     @property
-    def login_exclude_paths(self):
+    def login_exclude_paths(self) -> list[str]:
         """Paths the login plugin wants excluded (e.g. /logout)."""
         if (self._login_plugin
                 and hasattr(self._login_plugin, 'exclude_paths')):
@@ -244,7 +254,7 @@ class Scanner:
         """The authenticated BrowserContext, or None."""
         return self._context
 
-    async def start(self):
+    async def start(self) -> None:
         """Launch browser and start all engines."""
         if self._started:
             return
@@ -322,7 +332,7 @@ class Scanner:
 
         self._started = True
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop engines and close browser."""
         if not self._started:
             return
@@ -363,7 +373,13 @@ class Scanner:
 
         self._started = False
 
-    async def scan_page(self, url, *, extract_links=False, dedup=True):
+    async def scan_page(
+        self,
+        url: str,
+        *,
+        extract_links: bool = False,
+        dedup: bool = True,
+    ) -> dict:
         """Scan a single page with all engines.
 
         Args:
@@ -395,14 +411,14 @@ class Scanner:
                 page, url, extract_links, dedup, t0)
         except Exception as e:
             return self._skip_result(
-                url, 'error: {}'.format(e), t0)
+                url, f'error: {e}', t0)
         finally:
             try:
                 await page.close()
             except Exception:
                 pass
 
-    async def restart_browser(self):
+    async def restart_browser(self) -> None:
         """Restart browser and engines (for memory leak prevention).
 
         Preserves auth state.  Called by the crawl loop every N pages.
@@ -468,7 +484,7 @@ class Scanner:
                     print("  Engine restart failed ({}): {}".format(
                         type(eng).__name__, e))
 
-    async def check_session(self, page):
+    async def check_session(self, page) -> bool:
         """Check if the authenticated session is still active.
 
         Returns True if OK (or no auth configured), False if expired.
@@ -478,7 +494,7 @@ class Scanner:
             return await self._login_plugin.is_logged_in(page)
         return True
 
-    async def relogin(self, reason=''):
+    async def relogin(self, reason: str = '') -> tuple:
         """Re-run the login flow.  Returns (context, success)."""
         if self._context:
             try:
@@ -517,10 +533,10 @@ class Scanner:
 
         if status >= 400:
             return self._skip_result(
-                url, 'HTTP {}'.format(status), t0)
+                url, f'HTTP {status}', t0)
         if content_type and content_type not in HTML_TYPES:
             return self._skip_result(
-                url, 'not HTML ({})'.format(content_type), t0)
+                url, f'not HTML ({content_type})', t0)
 
         # Content validation — combined into one CDP round-trip
         # instead of three.  Returns the doc's contentType, the rendered
@@ -533,11 +549,11 @@ class Scanner:
         html_length = probe.get('htmlLength') or 0
         if html_length < 100:
             return self._skip_result(
-                url, 'empty response ({} bytes)'.format(html_length), t0)
+                url, f'empty response ({html_length} bytes)', t0)
         doc_ct = (probe.get('contentType') or '').lower()
         if doc_ct and doc_ct not in HTML_TYPES:
             return self._skip_result(
-                url, 'not HTML ({})'.format(doc_ct), t0)
+                url, f'not HTML ({doc_ct})', t0)
         page_start = probe.get('htmlStart') or ''
         if page_start and '<html' not in page_start.lower():
             return self._skip_result(url, 'not HTML', t0)
@@ -648,7 +664,7 @@ class Scanner:
             # Reports remain readable but selector quality drops, so
             # surface the cause when verbose; never abort the scan.
             if self.verbose:
-                print("  WARNING: element resolver failed: {}".format(e),
+                print(f"  WARNING: element resolver failed: {e}",
                       file=sys.stderr)
 
     def _skip_result(self, url, reason, t0):

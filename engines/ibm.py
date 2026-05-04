@@ -132,7 +132,7 @@ class IbmEngine(Engine):
             print("ERROR: IBM Equal Access not found. "
                   "Run: npm install", file=sys.stderr)
             raise FileNotFoundError(ace_path)
-        with open(ace_path, 'r') as f:
+        with open(ace_path) as f:
             self._source = f.read()
 
     async def scan(self, page):
@@ -194,6 +194,6 @@ class IbmEngine(Engine):
                     })
         except Exception as e:
             if self.verbose and not self.quiet:
-                print("  ibm error: {}".format(e))
+                print(f"  ibm error: {e}")
 
         return out

@@ -43,7 +43,7 @@ def cmd_cleanup():
                     pass
     except Exception:
         pass
-    print("Killed {} orphaned browser process(es).".format(killed))
+    print(f"Killed {killed} orphaned browser process(es).")
     sys.exit(0)
 
 
@@ -54,7 +54,7 @@ def cmd_list_scans():
     if not scans:
         print("No registered scans.")
     else:
-        print("{} registered scan(s):\n".format(len(scans)))
+        print(f"{len(scans)} registered scan(s):\n")
         for sname, info in sorted(scans.items()):
             summary = info.get('summary', {})
             status = ('clean' if summary.get('clean')
@@ -109,7 +109,7 @@ def cmd_page_status(args, config):
         sys.exit(1)
     result = page_status(jsonl_path, args.page_status)
     if not result.get('found'):
-        print("URL not found in report: {}".format(args.page_status))
+        print(f"URL not found in report: {args.page_status}")
         sys.exit(1)
     status = 'CLEAN' if result['clean'] else 'FAILING'
     print("{} — {} ({} failed, {} cantTell)".format(
@@ -137,27 +137,51 @@ def cmd_page_status(args, config):
     sys.exit(0 if result['clean'] else 1)
 
 
+_SEARCH_PREFIXES = {
+    'sc:': 'sc',
+    'url:': 'url_pattern',
+    'sel:': 'selector_pattern',
+    'engine:': 'engine',
+    'outcome:': 'outcome',
+}
+
+
 def cmd_search(args, config):
-    """--search: query findings in a report."""
+    """--search: query findings in a report.
+
+    Query format:
+        sc:1.4.3       — WCAG SC number
+        url:/admin/*   — URL substring match (glob)
+        sel:*table*    — CSS selector glob
+        engine:axe     — engine name
+        outcome:failed — EARL outcome
+        1.4.3          — bare SC number is treated as `sc:`
+        anything-else  — treated as a selector glob
+    """
     from registry import search_findings
     query = args.search
     sc = url_pat = sel_pat = outcome_filter = eng_filter = None
-    if query.startswith('sc:'):
-        sc = query[3:]
-    elif query.startswith('url:'):
-        url_pat = query[4:]
-    elif query.startswith('sel:'):
-        sel_pat = query[4:]
-    elif query.startswith('engine:'):
-        eng_filter = query[7:]
-    elif query.startswith('outcome:'):
-        outcome_filter = query[8:]
+
+    for prefix, kind in _SEARCH_PREFIXES.items():
+        if query.startswith(prefix):
+            value = query[len(prefix):]
+            if kind == 'sc':
+                sc = value
+            elif kind == 'url_pattern':
+                url_pat = value
+            elif kind == 'selector_pattern':
+                sel_pat = value
+            elif kind == 'engine':
+                eng_filter = value
+            elif kind == 'outcome':
+                outcome_filter = value
+            break
     else:
-        # Default: treat as SC if it looks like one, else selector
+        # No prefix: bare SC number → sc:, anything else → selector
         if re.match(r'^\d+\.\d+\.\d+$', query):
             sc = query
         else:
-            sel_pat = '*' + query + '*'
+            sel_pat = f'*{query}*'
 
     jsonl_path = _resolve_report_jsonl(args.output, config)
     if not jsonl_path:
@@ -179,7 +203,7 @@ def cmd_search(args, config):
             m['selector'][:50]))
         print("    {}".format(m['url']))
     if len(matches) > 50:
-        print("\n  ... and {} more".format(len(matches) - 50))
+        print(f"\n  ... and {len(matches) - 50} more")
     sys.exit(0)
 
 

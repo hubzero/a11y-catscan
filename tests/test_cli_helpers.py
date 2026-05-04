@@ -17,44 +17,44 @@ import pytest
 
 class TestSafeInt:
     def test_int_passthrough(self, cli):
-        assert cli._safe_int(7) == 7
-        assert cli._safe_int(0) == 0
+        assert cli.safe_int(7) == 7
+        assert cli.safe_int(0) == 0
 
     def test_string_int(self, cli):
-        assert cli._safe_int('42') == 42
+        assert cli.safe_int('42') == 42
 
     def test_invalid_returns_default(self, cli):
-        assert cli._safe_int('abc', 99) == 99
-        assert cli._safe_int(None, 5) == 5
-        assert cli._safe_int([], 3) == 3
+        assert cli.safe_int('abc', 99) == 99
+        assert cli.safe_int(None, 5) == 5
+        assert cli.safe_int([], 3) == 3
 
     def test_default_zero(self, cli):
-        assert cli._safe_int('nope') == 0
+        assert cli.safe_int('nope') == 0
 
 
 # ── _parse_wcag_sc ─────────────────────────────────────────────
 
 class TestParseWcagSc:
     def test_normalized_format(self, cli):
-        scs = cli._parse_wcag_sc(['sc-1.4.3', 'sc-2.4.1'])
+        scs = cli.parse_wcag_sc(['sc-1.4.3', 'sc-2.4.1'])
         assert scs == {'1.4.3', '2.4.1'}
 
     def test_legacy_axe_format(self, cli):
-        scs = cli._parse_wcag_sc(['wcag143', 'wcag258'])
+        scs = cli.parse_wcag_sc(['wcag143', 'wcag258'])
         assert scs == {'1.4.3', '2.5.8'}
 
     def test_level_tags_ignored(self, cli):
         # 'wcag2a' / 'wcag21aa' are level tags, not SCs
-        scs = cli._parse_wcag_sc(['wcag2a', 'wcag21aa', 'wcag2aaa'])
+        scs = cli.parse_wcag_sc(['wcag2a', 'wcag21aa', 'wcag2aaa'])
         assert scs == set()
 
     def test_mixed_tags(self, cli):
-        scs = cli._parse_wcag_sc(
+        scs = cli.parse_wcag_sc(
             ['sc-1.1.1', 'wcag143', 'best-practice', 'aria-naming'])
         assert scs == {'1.1.1', '1.4.3'}
 
     def test_empty(self, cli):
-        assert cli._parse_wcag_sc([]) == set()
+        assert cli.parse_wcag_sc([]) == set()
 
 
 # ── normalize_url ──────────────────────────────────────────────
@@ -270,36 +270,36 @@ class TestLoadConfig:
 
 class TestMatchesAllowlist:
     def test_no_rules_no_match(self, cli):
-        assert not cli._matches_allowlist(
+        assert not cli.matches_allowlist(
             'sc-1.4.3', 'http://x/', [{}], [])
 
     def test_rule_id_must_match(self, cli):
         allowlist = [{'rule': 'sc-1.4.3'}]
-        assert cli._matches_allowlist(
+        assert cli.matches_allowlist(
             'sc-1.4.3', 'http://x/', [{}], allowlist)
-        assert not cli._matches_allowlist(
+        assert not cli.matches_allowlist(
             'sc-2.1.1', 'http://x/', [{}], allowlist)
 
     def test_url_substring_filter(self, cli):
         allowlist = [{'rule': 'sc-1.4.3', 'url': '/admin'}]
-        assert cli._matches_allowlist(
+        assert cli.matches_allowlist(
             'sc-1.4.3', 'http://x/admin/page', [{}], allowlist)
-        assert not cli._matches_allowlist(
+        assert not cli.matches_allowlist(
             'sc-1.4.3', 'http://x/public/page', [{}], allowlist)
 
     def test_target_substring_filter(self, cli):
         allowlist = [{'rule': 'sc-1.4.3', 'target': '#nav'}]
         nodes_match = [{'target': ['#nav .item']}]
         nodes_other = [{'target': ['#main']}]
-        assert cli._matches_allowlist(
+        assert cli.matches_allowlist(
             'sc-1.4.3', 'http://x/', nodes_match, allowlist)
-        assert not cli._matches_allowlist(
+        assert not cli.matches_allowlist(
             'sc-1.4.3', 'http://x/', nodes_other, allowlist)
 
     def test_engine_filter_single_engine(self, cli):
         allowlist = [{'rule': 'sc-1.4.3', 'engine': 'ibm'}]
         engines_dict = {'ibm': {'rule': 'text_contrast_sufficient'}}
-        assert cli._matches_allowlist(
+        assert cli.matches_allowlist(
             'sc-1.4.3', 'http://x/', [{}], allowlist,
             engines_dict=engines_dict)
 
@@ -307,16 +307,16 @@ class TestMatchesAllowlist:
         # Multi-engine findings are not suppressed by single-engine rules
         allowlist = [{'rule': 'sc-1.4.3', 'engine': 'ibm'}]
         engines_dict = {'ibm': {}, 'axe': {}}
-        assert not cli._matches_allowlist(
+        assert not cli.matches_allowlist(
             'sc-1.4.3', 'http://x/', [{}], allowlist,
             engines_dict=engines_dict)
 
     def test_outcome_filter(self, cli):
         allowlist = [{'rule': 'sc-1.4.3', 'outcome': 'cantTell'}]
-        assert cli._matches_allowlist(
+        assert cli.matches_allowlist(
             'sc-1.4.3', 'http://x/', [{}], allowlist,
             outcome='cantTell')
-        assert not cli._matches_allowlist(
+        assert not cli.matches_allowlist(
             'sc-1.4.3', 'http://x/', [{}], allowlist,
             outcome='failed')
 
@@ -325,8 +325,8 @@ class TestMatchesAllowlist:
         allowlist = [{'rule': 'sc-1.4.3', 'url': '/admin',
                       'target': '#nav'}]
         nodes = [{'target': ['#nav']}]
-        assert cli._matches_allowlist(
+        assert cli.matches_allowlist(
             'sc-1.4.3', 'http://x/admin/p', nodes, allowlist)
         # Wrong URL — no match
-        assert not cli._matches_allowlist(
+        assert not cli.matches_allowlist(
             'sc-1.4.3', 'http://x/public/p', nodes, allowlist)

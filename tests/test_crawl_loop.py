@@ -184,7 +184,7 @@ class TestCrawlLoop:
 
         # Use _extract_urls_from_report + crawl_and_scan(seed_urls)
         # to mirror what the CLI's --rescan path does.
-        urls = cli._extract_urls_from_report(str(prev))
+        urls = cli.extract_urls_from_report(str(prev))
         assert urls == [fixture_site + '/page-a.html']
 
         json_path = str(tmp_path / 'scan.json')

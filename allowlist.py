@@ -192,10 +192,24 @@ def classify_page(deduped_data, page_url, allowlist, totals):
     by `crawl_and_scan` to keep a running tally so main() doesn't
     need to re-iterate the JSONL after the scan.
 
-    `totals` is a dict shaped like:
-        {'wcag': int, 'aria': int, 'bp': int,
-         'incomplete': int, 'rules': set()}
+    `totals` is a `results.RunningTotals` instance (mutated
+    in place).  For backward compat with old callers that pass a
+    plain dict, dict-style access is also accepted.
     """
+    is_dict = isinstance(totals, dict)
+
+    def _bump(field, n):
+        if is_dict:
+            totals[field] += n
+        else:
+            setattr(totals, field, getattr(totals, field) + n)
+
+    def _add_rule(rule_id):
+        if is_dict:
+            totals['rules'].add(rule_id)
+        else:
+            totals.rules.add(rule_id)
+
     for v in deduped_data.get(EARL_FAILED, []):
         if allowlist and matches_allowlist(
                 v.get('id', ''), page_url,
@@ -209,14 +223,14 @@ def classify_page(deduped_data, page_url, allowlist, totals):
         # ARIA landmark naming rules (which IBM mis-maps to
         # SC 2.4.1) from inflating the WCAG count.
         if any(t.startswith('aria-') for t in tags):
-            totals['aria'] += nodes
+            _bump('aria', nodes)
         elif any(t.startswith('sc-') for t in tags):
-            totals['wcag'] += nodes
-            totals['rules'].add(v.get('id', ''))
+            _bump('wcag', nodes)
+            _add_rule(v.get('id', ''))
         else:
             # bp-* tagged or untagged — both go into the
             # best-practice bucket.
-            totals['bp'] += nodes
+            _bump('bp', nodes)
 
     for v in deduped_data.get(EARL_CANTTELL, []):
         if allowlist and matches_allowlist(
@@ -225,4 +239,4 @@ def classify_page(deduped_data, page_url, allowlist, totals):
                 engines_dict=v.get('engines'),
                 outcome=EARL_CANTTELL):
             continue
-        totals['incomplete'] += count_nodes([v])
+        _bump('incomplete', count_nodes([v]))

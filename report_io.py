@@ -31,7 +31,7 @@ def iter_jsonl(jsonl_path):
     Skips blank or corrupt lines (e.g. from a partial write after a
     crash).  Corrupt lines are reported on stderr but do not raise.
     """
-    with open(jsonl_path, 'r') as f:
+    with open(jsonl_path) as f:
         for lineno, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -43,8 +43,7 @@ def iter_jsonl(jsonl_path):
                       "skipping".format(lineno, jsonl_path),
                       file=sys.stderr)
                 continue
-            for url, data in obj.items():
-                yield url, data
+            yield from obj.items()
 
 
 def iter_report(path):
@@ -53,7 +52,7 @@ def iter_report(path):
     Auto-detects format: if the file parses as a JSON object, iterates
     its key-value pairs.  Otherwise falls back to JSONL line-by-line.
     """
-    with open(path, 'r') as f:
+    with open(path) as f:
         first = f.read(1)
         f.seek(0)
         if first == '{':

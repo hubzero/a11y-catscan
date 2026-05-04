@@ -169,7 +169,7 @@ def _sc_to_wcag_tags(sc):
     """Convert a WCAG SC number like '1.4.3' to normalized tags."""
     if not sc:
         return []
-    return ['sc-{}'.format(sc)]
+    return [f'sc-{sc}']
 
 
 class HtmlcsEngine(Engine):
@@ -205,7 +205,7 @@ class HtmlcsEngine(Engine):
             print("ERROR: HTML_CodeSniffer not found. "
                   "Run: npm install", file=sys.stderr)
             raise FileNotFoundError(htmlcs_path)
-        with open(htmlcs_path, 'r') as f:
+        with open(htmlcs_path) as f:
             self._source = f.read()
 
     async def scan(self, page):
@@ -303,6 +303,6 @@ class HtmlcsEngine(Engine):
                     })
         except Exception as e:
             if self.verbose and not self.quiet:
-                print("  htmlcs error: {}".format(e))
+                print(f"  htmlcs error: {e}")
 
         return out

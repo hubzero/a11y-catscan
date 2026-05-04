@@ -100,10 +100,10 @@ def generate_llm_report(jsonl_path, output_path, start_url,
     # Build markdown
     lines = []
     lines.append('# a11y-catscan accessibility scan results\n')
-    lines.append('Site: {}  '.format(start_url))
-    lines.append('Level: {}  '.format(level_label))
-    lines.append('axe-core: {}  '.format(axe_ver))
-    lines.append('Pages scanned: {}  '.format(total_pages))
+    lines.append(f'Site: {start_url}  ')
+    lines.append(f'Level: {level_label}  ')
+    lines.append(f'axe-core: {axe_ver}  ')
+    lines.append(f'Pages scanned: {total_pages}  ')
     lines.append('Scan date: {}\n'.format(
         datetime.now().strftime('%Y-%m-%d')))
     lines.append(
@@ -152,7 +152,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
                 rule_id, info['impact'], info['count']))
             lines.append('{}'.format(info['help']))
             if wcag_scs:
-                lines.append('WCAG: {}'.format(wcag_scs))
+                lines.append(f'WCAG: {wcag_scs}')
             lines.append('Pages: {}'.format(
                 ', '.join(info['pages'][:10])))
             if len(info['pages']) > 10:
@@ -160,7 +160,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
                     len(info['pages']) - 10))
             lines.append('Examples:')
             for ex in info['examples']:
-                lines.append('```html\n{}\n```'.format(ex))
+                lines.append(f'```html\n{ex}\n```')
             lines.append('')
     else:
         lines.append('## Violations: NONE\n')

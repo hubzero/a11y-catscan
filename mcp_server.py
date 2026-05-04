@@ -34,6 +34,7 @@ import os
 import re
 import sys
 import logging
+from pathlib import Path
 from urllib.parse import urlparse
 
 # MCP server must log to stderr — stdout is reserved for the protocol.
@@ -196,25 +197,26 @@ async def analyze_report(
                         for item in data.get(outcome, []):
                             tags = item.get('tags', [])
 
-                            if group_by == 'wcag':
-                                keys = [t for t in tags
-                                        if t.startswith('sc-')]
-                            elif group_by == 'engine':
-                                engines_dict = item.get('engines', {})
-                                if engines_dict:
-                                    keys = ['+'.join(
-                                        sorted(engines_dict))]
-                                else:
-                                    keys = [item.get('engine', '?')]
-                            elif group_by == 'bp':
-                                keys = [t for t in tags
-                                        if t.startswith(
-                                            ('bp-', 'aria-'))]
-                                if not keys:
+                            match group_by:
+                                case 'wcag':
                                     keys = [t for t in tags
                                             if t.startswith('sc-')]
-                            else:
-                                keys = [item.get('id', '?')]
+                                case 'engine':
+                                    engines_dict = item.get('engines', {})
+                                    if engines_dict:
+                                        keys = ['+'.join(
+                                            sorted(engines_dict))]
+                                    else:
+                                        keys = [item.get('engine', '?')]
+                                case 'bp':
+                                    keys = [t for t in tags
+                                            if t.startswith(
+                                                ('bp-', 'aria-'))]
+                                    if not keys:
+                                        keys = [t for t in tags
+                                                if t.startswith('sc-')]
+                                case _:
+                                    keys = [item.get('id', '?')]
 
                             if not keys:
                                 keys = [item.get('id', 'unknown')]
@@ -474,38 +476,37 @@ async def manage_scans(
     Returns:
         JSON with scan details or the full registry.
     """
-    if action == 'list':
-        scans = list_scans()
-        entries = []
-        for sname, info in sorted(scans.items()):
-            entries.append({
+    match action:
+        case 'list':
+            scans = list_scans()
+            entries = [{
                 'name': sname,
                 'timestamp': info.get('timestamp', ''),
                 'url': info.get('url', ''),
                 'engines': info.get('engines', []),
                 'summary': info.get('summary', {}),
-            })
-        return json.dumps({'scans': entries}, indent=2)
+            } for sname, info in sorted(scans.items())]
+            return json.dumps({'scans': entries}, indent=2)
 
-    elif action == 'get':
-        if not name:
-            return json.dumps({'error': 'name required for get'})
-        scan = get_scan(name)
-        if not scan:
-            return json.dumps({'error': 'Scan not found: ' + name})
-        return json.dumps({'name': name, **scan}, indent=2)
+        case 'get':
+            if not name:
+                return json.dumps({'error': 'name required for get'})
+            scan = get_scan(name)
+            if not scan:
+                return json.dumps({'error': f'Scan not found: {name}'})
+            return json.dumps({'name': name, **scan}, indent=2)
 
-    elif action == 'delete':
-        if not name:
-            return json.dumps({'error': 'name required for delete'})
-        removed = delete_scan(name)
-        if removed:
-            return json.dumps({
-                'deleted': name, 'ok': True})
-        return json.dumps({
-            'error': 'Scan not found: ' + name})
+        case 'delete':
+            if not name:
+                return json.dumps(
+                    {'error': 'name required for delete'})
+            removed = delete_scan(name)
+            if removed:
+                return json.dumps({'deleted': name, 'ok': True})
+            return json.dumps({'error': f'Scan not found: {name}'})
 
-    return json.dumps({'error': 'Unknown action: ' + action})
+        case _:
+            return json.dumps({'error': f'Unknown action: {action}'})
 
 
 def _resolve_report(name_or_path):
@@ -535,10 +536,12 @@ def _resolve_report(name_or_path):
         jsonl = reports.get('jsonl', '')
         if jsonl and os.path.exists(jsonl):
             return jsonl
-        # Try json → jsonl
+        # Try json → jsonl (with_suffix only swaps the last
+        # extension, so paths whose directories contain '.json'
+        # are handled correctly).
         jp = reports.get('json', '')
         if jp:
-            jsonl = jp.replace('.json', '.jsonl')
+            jsonl = str(Path(jp).with_suffix('.jsonl'))
             if os.path.exists(jsonl):
                 return jsonl
 

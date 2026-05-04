@@ -45,8 +45,14 @@ def _save_registry(data, path=None):
         json.dump(data, f, indent=2, default=str)
 
 
-def register_scan(name, report_paths, url=None, engines=None,
-                   summary=None, registry_path=None):
+def register_scan(
+    name: str,
+    report_paths: dict[str, str],
+    url: str | None = None,
+    engines: list[str] | None = None,
+    summary: dict | None = None,
+    registry_path: str | None = None,
+) -> dict:
     """Register a completed scan by name.
 
     Args:
@@ -69,18 +75,21 @@ def register_scan(name, report_paths, url=None, engines=None,
     return reg[name]
 
 
-def get_scan(name, registry_path=None):
+def get_scan(name: str, registry_path: str | None = None) -> dict | None:
     """Look up a named scan.  Returns the registry entry or None."""
     reg = _load_registry(registry_path)
     return reg.get(name)
 
 
-def list_scans(registry_path=None):
+def list_scans(registry_path: str | None = None) -> dict[str, dict]:
     """List all registered scans.  Returns dict of name → entry."""
     return _load_registry(registry_path)
 
 
-def delete_scan(name, registry_path=None):
+def delete_scan(
+    name: str,
+    registry_path: str | None = None,
+) -> dict | None:
     """Remove a scan from the registry (doesn't delete files)."""
     reg = _load_registry(registry_path)
     removed = reg.pop(name, None)
@@ -91,9 +100,15 @@ def delete_scan(name, registry_path=None):
 
 # ── Search Findings ──────────────────────────────────────────────
 
-def search_findings(jsonl_path, sc=None, url_pattern=None,
-                    selector_pattern=None, outcome=None,
-                    engine=None, dedup=True):
+def search_findings(
+    jsonl_path: str,
+    sc: str | None = None,
+    url_pattern: str | None = None,
+    selector_pattern: str | None = None,
+    outcome: str | None = None,
+    engine: str | None = None,
+    dedup: bool = True,
+) -> list[dict]:
     """Search a JSONL report for matching findings.
 
     All filters are AND — a finding must match all specified filters.
@@ -192,7 +207,11 @@ def search_findings(jsonl_path, sc=None, url_pattern=None,
 
 # ── Page Status ──────────────────────────────────────────────────
 
-def page_status(jsonl_path, url, dedup=True):
+def page_status(
+    jsonl_path: str,
+    url: str,
+    dedup: bool = True,
+) -> dict:
     """Check the status of a specific URL in a report.
 
     Args:
@@ -278,7 +297,7 @@ def page_status(jsonl_path, url, dedup=True):
 
 # ── Structured Diff ──────────────────────────────────────────────
 
-def diff_scans(old_jsonl, new_jsonl):
+def diff_scans(old_jsonl: str, new_jsonl: str) -> dict:
     """Compare two scans and return structured results.
 
     Args:
