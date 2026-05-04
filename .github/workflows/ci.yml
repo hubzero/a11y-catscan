@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install Node engines (axe / alfa / ibm / htmlcs)
+        run: npm ci
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      # Cache Playwright's downloaded Chromium under
+      # ~/.cache/ms-playwright keyed on the playwright version
+      # in pyproject.toml.  ~110 MB download, takes ~30 s on a
+      # cold install.
+      - name: Cache Playwright Chromium
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pyproject.toml') }}
+
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: playwright install-deps chromium
+
+      - name: Fast non-browser tests
+        run: pytest -m "not browser" --tb=short
+
+      - name: Full suite (with browser)
+        run: pytest --tb=short

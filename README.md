@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo-a11y-catscan.svg" alt="a11y-catscan" width="600">
+  <img src="docs/assets/logo-a11y-catscan.svg" alt="a11y-catscan" width="180">
 </p>
 
 <p align="center">
@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/hubzero/a11y-catscan/actions/workflows/ci.yml"><img src="https://github.com/hubzero/a11y-catscan/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://hubzero.github.io/a11y-catscan/"><img src="https://img.shields.io/badge/docs-Pages-blue" alt="docs"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12+-3776AB?logo=python&logoColor=white" alt="Python 3.12+"></a>
