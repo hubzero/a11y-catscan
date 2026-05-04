@@ -1,0 +1,74 @@
+{
+  "site_name": "a11y-catscan",
+  "site_tagline": "Multi-engine WCAG scanning for large, real websites.",
+  "site_description": "a11y-catscan crawls HTML pages with Playwright and runs axe-core, Siteimprove Alfa, IBM Equal Access, and HTML_CodeSniffer into streaming reports.",
+  "github_href": "https://github.com/hubzero/a11y-catscan",
+  "docs": [
+    {
+      "slug": "getting-started",
+      "title": "Getting started",
+      "source": "docs-src/getting-started.md",
+      "summary": "Install dependencies, run a first scan, and read the generated reports.",
+      "featured": true
+    },
+    {
+      "slug": "configuration",
+      "title": "Configuration",
+      "source": "docs-src/configuration.md",
+      "summary": "YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.",
+      "featured": true
+    },
+    {
+      "slug": "scan-workflows",
+      "title": "Scan workflows",
+      "source": "docs-src/scan-workflows.md",
+      "summary": "Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.",
+      "featured": true
+    },
+    {
+      "slug": "authentication",
+      "title": "Authentication",
+      "source": "docs-src/authentication.md",
+      "summary": "Login plugins, saved storage state, session recovery, and logout-trap handling.",
+      "featured": true
+    },
+    {
+      "slug": "reports",
+      "title": "Reports",
+      "source": "docs-src/reports.md",
+      "summary": "JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.",
+      "featured": true
+    },
+    {
+      "slug": "mcp",
+      "title": "MCP tools",
+      "source": "docs-src/mcp.md",
+      "summary": "Claude Code / MCP integration, tool list, safety model, and local setup."
+    },
+    {
+      "slug": "troubleshooting",
+      "title": "Troubleshooting",
+      "source": "docs-src/troubleshooting.md",
+      "summary": "Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.",
+      "featured": true
+    },
+    {
+      "slug": "faq",
+      "title": "FAQ",
+      "source": "docs-src/faq.md",
+      "summary": "Short answers for teams adopting a11y-catscan."
+    },
+    {
+      "slug": "design",
+      "title": "Design",
+      "source": "DESIGN.md",
+      "summary": "Architecture, source layout, lifecycles, safety boundaries, and testing model."
+    },
+    {
+      "slug": "changelog",
+      "title": "Changelog",
+      "source": "CHANGELOG.md",
+      "summary": "Shipped milestones and hardening notes."
+    }
+  ]
+}

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scan workflows | a11y-catscan</title>
+  <meta name="description" content="Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="../getting-started/index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item" href="../getting-started/index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item" href="../configuration/index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item" href="../authentication/index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item" href="../reports/index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item" href="../mcp/index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item" href="../troubleshooting/index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item" href="../faq/index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item" href="../design/index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item" href="../changelog/index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>Scan workflows</h1>
+          <p class="docs-article__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</p>
+          <p class="docs-article__source">Scan workflows</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#full-baseline-crawl">Full baseline crawl</a></li>
+<li class="toc__item toc__item--level-2"><a href="#single-page-verification">Single-page verification</a></li>
+<li class="toc__item toc__item--level-2"><a href="#url-list-scan">URL list scan</a></li>
+<li class="toc__item toc__item--level-2"><a href="#rescan-previous-failures">Rescan previous failures</a></li>
+<li class="toc__item toc__item--level-2"><a href="#group-findings">Group findings</a></li>
+<li class="toc__item toc__item--level-2"><a href="#resume-a-crawl">Resume a crawl</a></li>
+<li class="toc__item toc__item--level-2"><a href="#incremental-reports">Incremental reports</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<p>Most teams use a11y-catscan in a loop:</p>
+<ol>
+<li>Establish a baseline.</li>
+<li>Group recurring failures.</li>
+<li>Fix a template, component, or CSS rule.</li>
+<li>Verify one page.</li>
+<li>Rescan only previously affected pages.</li>
+<li>Diff against the baseline.</li>
+</ol>
+<h2 id="full-baseline-crawl">Full baseline crawl</h2>
+<pre><code class="language-sh">./a11y-catscan.py --engine all --max-pages 500 --llm https://example.com/
+</code></pre>
+<p>Use all engines for the baseline when time allows. It gives you better
+coverage and useful cross-engine confirmation.</p>
+<h2 id="single-page-verification">Single-page verification</h2>
+<pre><code class="language-sh">./a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
+</code></pre>
+<p>This is the fast check after a fix. It does not follow links and it
+prints a compact summary when <code>--summary-json</code> is set.</p>
+<p>To narrow a verification to one axe rule:</p>
+<pre><code class="language-sh">./a11y-catscan.py --page --rule color-contrast https://example.com/fixed-page
+</code></pre>
+<h2 id="url-list-scan">URL list scan</h2>
+<p>For a curated set of templates:</p>
+<pre><code class="language-text">https://example.com/
+https://example.com/docs/intro
+https://example.com/support/contact
+</code></pre>
+<p>Run:</p>
+<pre><code class="language-sh">./a11y-catscan.py --urls pages.txt --engine axe,alfa --llm
+</code></pre>
+<p>URL-list mode does not follow discovered links. It scans only the list.</p>
+<h2 id="rescan-previous-failures">Rescan previous failures</h2>
+<p>If a baseline produced <code>baseline.jsonl</code>, rescan only pages with
+violations or incompletes:</p>
+<pre><code class="language-sh">./a11y-catscan.py --rescan baseline.jsonl --diff baseline.jsonl --llm
+</code></pre>
+<p>You can also extract from a JSON or JSONL report:</p>
+<pre><code class="language-sh">./a11y-catscan.py --violations-from baseline.json --diff baseline.jsonl
+./a11y-catscan.py --incompletes-from baseline.json --diff baseline.jsonl
+</code></pre>
+<h2 id="group-findings">Group findings</h2>
+<p>Grouping helps identify one fix that removes many page-level findings:</p>
+<pre><code class="language-sh">./a11y-catscan.py --group-by wcag https://example.com/
+./a11y-catscan.py --group-by selector https://example.com/
+./a11y-catscan.py --group-by reason https://example.com/
+./a11y-catscan.py --group-by engine https://example.com/
+</code></pre>
+<p>Useful groupings:</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Use it for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rule</code></td>
+<td>Which engine rule is most common</td>
+</tr>
+<tr>
+<td><code>selector</code></td>
+<td>Which component or template emits repeated failures</td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>Why incompletes happen, especially contrast uncertainty</td>
+</tr>
+<tr>
+<td><code>wcag</code></td>
+<td>Audit-level prioritization by Success Criterion</td>
+</tr>
+<tr>
+<td><code>engine</code></td>
+<td>Tool-specific vs cross-engine findings</td>
+</tr>
+<tr>
+<td><code>bp</code></td>
+<td>Best-practice / ARIA categories</td>
+</tr>
+</tbody>
+</table>
+<h2 id="resume-a-crawl">Resume a crawl</h2>
+<p>Long scans write a <code>.state.json</code> file. Resume with:</p>
+<pre><code class="language-sh">./a11y-catscan.py --resume reports/baseline.state.json
+</code></pre>
+<p>The state file stores:</p>
+<ul>
+<li>queued URLs</li>
+<li>visited URLs</li>
+<li>start URL</li>
+<li>pages scanned</li>
+<li>URLs banned as logout traps</li>
+</ul>
+<p>Resume is for crawls. URL-list and rescan modes intentionally do not
+write resume state because their frontier is already explicit.</p>
+<h2 id="incremental-reports">Incremental reports</h2>
+<p><code>save_every</code> controls how often derived JSON/HTML reports are rebuilt
+from the JSONL stream:</p>
+<pre><code class="language-sh">./a11y-catscan.py --save-every 10 --max-pages 1000 https://example.com/
+</code></pre>
+<p>The JSONL stream is still flushed per page. <code>save_every</code> only affects
+the convenience reports that are derived from it.</p>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

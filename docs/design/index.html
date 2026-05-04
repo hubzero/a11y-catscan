@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Design | a11y-catscan</title>
+  <meta name="description" content="Architecture, source layout, lifecycles, safety boundaries, and testing model.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="../getting-started/index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item" href="../getting-started/index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item" href="../configuration/index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item" href="../scan-workflows/index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item" href="../authentication/index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item" href="../reports/index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item" href="../mcp/index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item" href="../troubleshooting/index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item" href="../faq/index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item" href="../changelog/index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>Design</h1>
+          <p class="docs-article__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</p>
+          <p class="docs-article__source">a11y-catscan -- design</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#non-goals">Non-goals</a></li>
+<li class="toc__item toc__item--level-2"><a href="#execution-surfaces">Execution surfaces</a></li>
+<li class="toc__item toc__item--level-2"><a href="#source-layout">Source layout</a></li>
+<li class="toc__item toc__item--level-2"><a href="#result-model">Result model</a></li>
+<li class="toc__item toc__item--level-2"><a href="#engine-model">Engine model</a></li>
+<li class="toc__item toc__item--level-2"><a href="#page-scan-lifecycle">Page scan lifecycle</a></li>
+<li class="toc__item toc__item--level-2"><a href="#crawl-lifecycle">Crawl lifecycle</a></li>
+<li class="toc__item toc__item--level-3"><a href="#url-filtering">URL filtering</a></li>
+<li class="toc__item toc__item--level-3"><a href="#streaming-persistence">Streaming persistence</a></li>
+<li class="toc__item toc__item--level-3"><a href="#signals">Signals</a></li>
+<li class="toc__item toc__item--level-2"><a href="#authentication-model">Authentication model</a></li>
+<li class="toc__item toc__item--level-2"><a href="#report-consumers">Report consumers</a></li>
+<li class="toc__item toc__item--level-3"><a href="#html-report">HTML report</a></li>
+<li class="toc__item toc__item--level-3"><a href="#llm-report">LLM report</a></li>
+<li class="toc__item toc__item--level-2"><a href="#mcp-safety-model">MCP safety model</a></li>
+<li class="toc__item toc__item--level-2"><a href="#security-notes">Security notes</a></li>
+<li class="toc__item toc__item--level-2"><a href="#testing-model">Testing model</a></li>
+<li class="toc__item toc__item--level-2"><a href="#style">Style</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<p>a11y-catscan is a multi-engine WCAG accessibility scanner. It crawls
+HTML pages with Playwright/Chromium, runs one or more accessibility
+engines against each page, normalizes their findings into one shared
+EARL-shaped result model, and streams reports to disk as it goes.</p>
+<p>The central design target is practical audit work on large, real sites:</p>
+<ul>
+<li>A scan can run for thousands of pages without holding all findings in
+memory.</li>
+<li>Partial results survive process termination.</li>
+<li>A failed browser, engine, or auth session is visible instead of
+quietly producing a clean-looking report.</li>
+<li>The same page-scan code path is reusable from the CLI crawl loop, the
+MCP server, tests, and small one-off verification scripts.</li>
+</ul>
+<p>The scanner is not a replacement for manual WCAG judgment. It is an
+evidence collector: automated failures are prioritized, <code>cantTell</code>
+items are surfaced for review, and engine attribution is preserved so
+auditors can decide whether a finding is broadly confirmed or tool
+specific.</p>
+<h2 id="non-goals">Non-goals</h2>
+<ul>
+<li>Full WCAG certification. Automated engines cannot verify every WCAG
+requirement and cannot reason about intent.</li>
+<li>Scanning every resource type. Scope is HTML/XHTML pages rendered in a
+browser. PDFs, Office documents, videos, audio, and other media are
+explicitly out of scope.</li>
+<li>A general browser automation framework. The scanner exposes enough
+hooks for login and session checking, but page interaction beyond
+authentication belongs in site-specific plugins or pre-scan setup.</li>
+<li>A long-running MCP crawl service. Full crawls write files, handle
+signals, and may run for hours; they stay in the CLI. MCP tools are
+quick, bounded analysis and one-page scan helpers.</li>
+</ul>
+<h2 id="execution-surfaces">Execution surfaces</h2>
+<p>There are three supported ways into the codebase:</p>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Entry point</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CLI</td>
+<td><code>./a11y-catscan.py</code></td>
+<td>Parse operator flags, load YAML config, select scan/analysis mode, write final summaries, register completed scans</td>
+</tr>
+<tr>
+<td>Library</td>
+<td><code>scanner.Scanner</code></td>
+<td>Start browser + engines, scan one page, normalize selectors, manage auth context</td>
+</tr>
+<tr>
+<td>MCP</td>
+<td><code>mcp_server.py</code> or <code>a11y-catscan.py --mcp</code></td>
+<td>Expose bounded tools for one-page scanning, report analysis, registry lookup, and WCAG metadata</td>
+</tr>
+</tbody>
+</table>
+<p>The CLI imports the same public functions used by tests and external
+integrations. Some names are intentionally re-exported from
+<code>a11y-catscan.py</code> so older scripts that imported the single-file tool
+continue to work after the module split.</p>
+<h2 id="source-layout">Source layout</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>a11y-catscan.py</code></td>
+<td>CLI entry point. Defines flags, loads config, dispatches analysis modes, resolves crawl settings, invokes <code>crawl_and_scan</code>, prints final summaries, registers scans, and starts MCP mode when <code>--mcp</code> is present</td>
+</tr>
+<tr>
+<td><code>scanner.py</code></td>
+<td>Reusable async scanner. Owns Playwright lifecycle, engine construction/start/stop, authenticated browser context, login plugin loading, saved storage state, per-page navigation, element resolution, browser restart, and session checks</td>
+</tr>
+<tr>
+<td><code>crawl.py</code></td>
+<td>Crawl engine. Owns URL frontier, visited set, worker sliding window, shared rate limiter, robots integration, incremental JSONL writes, report flushing, signal handlers, resume state, browser restart cadence, and auth recovery cycle</td>
+</tr>
+<tr>
+<td><code>crawl_utils.py</code></td>
+<td>Browser-free crawl helpers: URL normalization, strip-query rules, same-origin checks, robots.txt loading, <code>should_scan</code>, HEAD/GET HTTP probe, cookie loading, process cleanup, numeric parsing</td>
+</tr>
+<tr>
+<td><code>results.py</code></td>
+<td>Page-result helpers: node counting, <code>RunningTotals</code>, and cross-engine deduplication by <code>(selector, primary_tag, outcome)</code></td>
+</tr>
+<tr>
+<td><code>allowlist.py</code></td>
+<td>YAML allowlist loader and indexed matcher. Filters known-acceptable findings by normalized rule id, URL substring, target substring, engine, and outcome. Also classifies deduped page totals</td>
+</tr>
+<tr>
+<td><code>engine_mappings.py</code></td>
+<td>WCAG Success Criterion metadata, SC aliases, engine rule mappings, best-practice categories, ARIA categories, HTMLCS rule-code parsing, and shared EARL constants</td>
+</tr>
+<tr>
+<td><code>engines/base.py</code></td>
+<td>Engine interface and normalized result schema documentation</td>
+</tr>
+<tr>
+<td><code>engines/axe.py</code></td>
+<td>axe-core adapter: loads <code>axe.min.js</code>, injects it into the page, runs <code>axe.run</code>, normalizes tags and best-practice / ARIA categories</td>
+</tr>
+<tr>
+<td><code>engines/alfa.py</code></td>
+<td>Python side of Siteimprove Alfa integration. Starts <code>alfa-engine.mjs</code>, connects to its browser server, serializes scans through an async lock, forwards cookies, and normalizes Alfa results</td>
+</tr>
+<tr>
+<td><code>alfa-engine.mjs</code></td>
+<td>Node.js Alfa subprocess. Launches Chromium through Playwright <code>launchServer</code>, filters Alfa ACT rules by WCAG level/version, scans pages in isolated contexts, resolves selectors in the DOM, and returns newline-delimited JSON</td>
+</tr>
+<tr>
+<td><code>engines/ibm.py</code></td>
+<td>IBM Equal Access adapter: injects <code>ace.js</code>, runs IBM's checker, maps policy/confidence pairs to EARL outcomes and normalized tags</td>
+</tr>
+<tr>
+<td><code>engines/htmlcs.py</code></td>
+<td>HTML_CodeSniffer adapter: injects <code>HTMLCS.js</code>, runs a WCAG standard, maps ERROR/WARNING messages to failed/cantTell</td>
+</tr>
+<tr>
+<td><code>engines/__init__.py</code></td>
+<td>Engine registry and <code>make_engine</code> factory with engine-specific kwargs</td>
+</tr>
+<tr>
+<td><code>report_io.py</code></td>
+<td>Streaming JSON / JSONL readers plus <code>iter_deduped</code> and URL extraction helpers</td>
+</tr>
+<tr>
+<td><code>report_html.py</code></td>
+<td>Streaming human-readable HTML report generator. Aggregates stats in one pass, renders per-page details in a second pass</td>
+</tr>
+<tr>
+<td><code>report_llm.py</code></td>
+<td>Token-efficient Markdown report for LLM-assisted remediation. Groups violations and incompletes, includes representative HTML snippets, and points to full reports</td>
+</tr>
+<tr>
+<td><code>report_group.py</code></td>
+<td><code>--group-by</code> terminal summary printer</td>
+</tr>
+<tr>
+<td><code>report_diff.py</code></td>
+<td>CLI text diff between two JSONL scans</td>
+</tr>
+<tr>
+<td><code>registry.py</code></td>
+<td>Named scan registry plus search, page status, and structured diff utilities used by CLI and MCP</td>
+</tr>
+<tr>
+<td><code>cli_modes.py</code></td>
+<td>No-scan CLI modes: cleanup, list scans, page status, search, audit help</td>
+</tr>
+<tr>
+<td><code>mcp_server.py</code></td>
+<td>FastMCP tool definitions and MCP-specific safety checks</td>
+</tr>
+<tr>
+<td><code>login-hubzero.py</code></td>
+<td>Example login plugin implementing the scanner auth contract</td>
+</tr>
+</tbody>
+</table>
+<h2 id="result-model">Result model</h2>
+<p>Every engine returns a list of normalized findings:</p>
+<pre><code class="language-python">{
+    &quot;id&quot;: &quot;color-contrast&quot;,
+    &quot;engine&quot;: &quot;axe&quot;,
+    &quot;outcome&quot;: &quot;failed&quot;,
+    &quot;description&quot;: &quot;...&quot;,
+    &quot;help&quot;: &quot;...&quot;,
+    &quot;helpUrl&quot;: &quot;...&quot;,
+    &quot;impact&quot;: &quot;serious&quot;,
+    &quot;tags&quot;: [&quot;sc-1.4.3&quot;],
+    &quot;nodes&quot;: [{
+        &quot;target&quot;: [&quot;#main&quot;],
+        &quot;html&quot;: &quot;&lt;main&gt;...&lt;/main&gt;&quot;,
+        &quot;any&quot;: [{&quot;message&quot;: &quot;...&quot;}],
+    }],
+}
+</code></pre>
+<p>Outcomes use W3C EARL names:</p>
+<table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>failed</code></td>
+<td>Automated check found a definite failure</td>
+</tr>
+<tr>
+<td><code>cantTell</code></td>
+<td>Automated check is inconclusive; manual review needed</td>
+</tr>
+<tr>
+<td><code>passed</code></td>
+<td>Rule passed</td>
+</tr>
+<tr>
+<td><code>inapplicable</code></td>
+<td>Rule does not apply</td>
+</tr>
+</tbody>
+</table>
+<p>Tags are normalized across engines:</p>
+<table>
+<thead>
+<tr>
+<th>Prefix</th>
+<th>Meaning</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sc-</code></td>
+<td>WCAG Success Criterion</td>
+<td><code>sc-1.4.3</code></td>
+</tr>
+<tr>
+<td><code>aria-</code></td>
+<td>ARIA-specific category</td>
+<td><code>aria-valid-attrs</code></td>
+</tr>
+<tr>
+<td><code>bp-</code></td>
+<td>Best-practice category</td>
+<td><code>bp-landmarks</code></td>
+</tr>
+</tbody>
+</table>
+<p>The <code>sc-</code> prefix is deliberate. Native engine tags such as
+<code>wcag2aa</code>, <code>wcag21aa</code>, and <code>wcag143</code> mix WCAG version, level, and
+criterion identifiers. The normalized <code>sc-*</code> vocabulary names only
+Success Criteria, which keeps reports and search filters unambiguous.</p>
+<h2 id="engine-model">Engine model</h2>
+<p>All engines share the same Playwright browser when possible, but they
+do not all run the same way.</p>
+<table>
+<thead>
+<tr>
+<th>Engine</th>
+<th>Mechanism</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>axe-core</td>
+<td>Browser injection</td>
+<td>Loads <code>node_modules/axe-core/axe.min.js</code>, calls <code>axe.run(document, opts)</code></td>
+</tr>
+<tr>
+<td>IBM Equal Access</td>
+<td>Browser injection</td>
+<td>Loads <code>accessibility-checker-engine/ace.js</code>, calls <code>new ace.Checker().check</code></td>
+</tr>
+<tr>
+<td>HTML_CodeSniffer</td>
+<td>Browser injection</td>
+<td>Loads <code>html_codesniffer/build/HTMLCS.js</code>, calls <code>HTMLCS.process</code></td>
+</tr>
+<tr>
+<td>Siteimprove Alfa</td>
+<td>Node.js subprocess</td>
+<td><code>alfa-engine.mjs</code> launches a Playwright browser server and runs Alfa ACT rules</td>
+</tr>
+</tbody>
+</table>
+<p>Alfa is special because it is a TypeScript ecosystem. Instead of
+opening an unauthenticated debug port, the subprocess launches Chromium
+with Playwright <code>launchServer()</code> and sends Python the GUID-bearing
+WebSocket endpoint over stdout. The GUID acts as a bearer token.
+Python connects to that endpoint and uses the same browser server for
+its own page work. Alfa scans are serialized by an <code>asyncio.Lock</code>
+because the subprocess protocol is one request/response stream.</p>
+<p>If every selected engine fails to start, scanning fails closed. This
+matters for audit integrity: missing dependencies, broken browser
+binaries, and bad engine configuration should be setup errors, not
+&quot;clean&quot; reports.</p>
+<h2 id="page-scan-lifecycle">Page scan lifecycle</h2>
+<p><code>Scanner.scan_page(url, extract_links=False, dedup=True)</code> performs the
+unit of work the rest of the system builds on:</p>
+<ol>
+<li>Require <code>Scanner.start()</code> to have launched Playwright and started at
+least one engine.</li>
+<li>Open a fresh page from the authenticated context when auth is
+configured; otherwise open a new browser page.</li>
+<li>Navigate with the configured <code>wait_until</code> strategy and timeout.</li>
+<li>Reject browser responses that are missing, HTTP 4xx/5xx, non-HTML,
+too small, or DOMs whose rendered document is not HTML.</li>
+<li>Run each started engine against the page.</li>
+<li>Normalize engine-native element references through a live-DOM
+resolver. CSS selectors, IBM XPath, and Alfa tag/attribute hints are
+converted into deterministic CSS selectors when possible.</li>
+<li>Optionally extract HTTP links for the crawl frontier.</li>
+<li>Attach <code>session_active</code> when a login plugin provides
+<code>is_logged_in(page)</code>.</li>
+<li>Close the page in a <code>finally</code> block.</li>
+<li>Return a page-result dict, or a structured skipped result with a
+reason.</li>
+</ol>
+<p>Engine scan failures are intentionally local to that engine's result
+list; a single noisy engine should not abort a page when other engines
+still produced useful data. Startup failure of all engines is different
+and is treated as fatal.</p>
+<h2 id="crawl-lifecycle">Crawl lifecycle</h2>
+<p><code>crawl_and_scan()</code> owns long-running site traversal. Its data structures
+are deliberately plain:</p>
+<ul>
+<li><code>queue</code>: URLs waiting to be scanned.</li>
+<li><code>visited</code>: normalized URLs already claimed by the frontier.</li>
+<li><code>_logout_urls</code>: URLs proven to trigger logout and banned from future
+visits.</li>
+<li><code>pending</code>: active asyncio tasks in the worker sliding window.</li>
+<li><code>running_totals</code>: summary counters updated as pages are written.</li>
+</ul>
+<p>The main loop keeps at most <code>workers</code> scan tasks in flight. Worker tasks
+never write report files directly; they return complete page results.
+The main loop consumes finished tasks, updates counters, writes one
+JSONL line, and enqueues discovered links. That single-writer shape is
+important enough to be documented at the write site because consumers
+assume a line is one complete page and never half of two interleaved
+pages.</p>
+<h3 id="url-filtering">URL filtering</h3>
+<p>URLs are normalized before they enter the frontier:</p>
+<ul>
+<li>Fragment removed.</li>
+<li>Path trailing slash normalized.</li>
+<li>Configured query parameters stripped globally or by path regex.</li>
+</ul>
+<p><code>should_scan()</code> then applies:</p>
+<ol>
+<li>Same-origin check.</li>
+<li>Static non-HTML extension skip list.</li>
+<li>Include path prefixes.</li>
+<li>Exclude path prefixes.</li>
+<li>Exclude regex list.</li>
+<li>Known non-HTML query patterns.</li>
+<li>robots.txt, unless disabled.</li>
+</ol>
+<p>The HTTP HEAD/GET probe in <code>crawl_utils.http_status()</code> is a cheap
+pre-browser filter for obvious non-HTML or error responses. It sends
+configured auth cookies when available so authenticated pages do not
+look like redirects to login.</p>
+<h3 id="streaming-persistence">Streaming persistence</h3>
+<p>JSONL is the primary write format:</p>
+<pre><code class="language-json">{&quot;https://example.test/page&quot;: {&quot;url&quot;: &quot;...&quot;, &quot;failed&quot;: [], &quot;...&quot;: &quot;...&quot;}}
+</code></pre>
+<p>The crawler opens the <code>.jsonl</code> once and appends one line per scanned
+page. Each line is flushed immediately so signal-triggered snapshots
+and concurrent readers see complete records.</p>
+<p>Periodic and final flushes convert JSONL into:</p>
+<ul>
+<li><code>.json</code>: one large JSON object for compatibility and inspection.</li>
+<li><code>.html</code>: human-readable report.</li>
+<li><code>.md</code>: optional LLM summary.</li>
+<li><code>.state.json</code>: crawl queue / visited / logout ban state for resume.</li>
+</ul>
+<p>The JSON and HTML products are derived artifacts. If a process dies
+mid-run, JSONL plus state are the recovery surface.</p>
+<h3 id="signals">Signals</h3>
+<p>The crawl loop installs:</p>
+<ul>
+<li><code>SIGTERM</code> / <code>SIGINT</code>: set an interrupted flag, flush reports, save
+state, then let the async loop wind down.</li>
+<li><code>SIGUSR1</code>: flush and save a snapshot without stopping.</li>
+</ul>
+<p>Signal handlers avoid directly exiting the interpreter. They set state
+that the async loop observes; this keeps Playwright cleanup predictable
+and avoids orphaned browser processes where possible.</p>
+<h2 id="authentication-model">Authentication model</h2>
+<p>Authentication is plugin-based. A login script is a Python module with:</p>
+<pre><code class="language-python">async def login(context, config) -&gt; bool: ...
+</code></pre>
+<p>Optional hooks:</p>
+<pre><code class="language-python">async def is_logged_in(page) -&gt; bool: ...
+async def init_from_context(context) -&gt; None: ...
+exclude_paths = [&quot;/logout&quot;]
+</code></pre>
+<p>The scanner stores Playwright <code>storage_state</code> in <code>.auth-state.json</code>.
+Startup first tries saved state, verifies it by loading the configured
+start URL, and falls back to <code>login()</code> when the state is missing or no
+longer valid.</p>
+<p>During a crawl, <code>is_logged_in(page)</code> is checked after successful page
+scans. If the session is lost:</p>
+<ol>
+<li>The suspect URL is recorded.</li>
+<li>Recovery mode is entered.</li>
+<li>In-flight workers drain.</li>
+<li>The scanner re-authenticates.</li>
+<li>Suspects are tested serially.</li>
+<li>URLs that immediately break the session are added to <code>_logout_urls</code>.</li>
+<li>Safe suspects are requeued for a real scan.</li>
+</ol>
+<p>If re-login fails, recovery is disabled for the rest of the run. That
+is intentionally imperfect but bounded: a broken auth plugin should not
+trap the crawler in an infinite recovery loop.</p>
+<h2 id="report-consumers">Report consumers</h2>
+<p>All report consumers read JSONL through <code>report_io</code>:</p>
+<ul>
+<li><code>iter_jsonl()</code> tolerates blank and corrupt lines, warning to stderr.</li>
+<li><code>iter_report()</code> auto-detects JSON vs JSONL.</li>
+<li><code>iter_deduped()</code> applies cross-engine dedup per page.</li>
+</ul>
+<p>Dedup is done on read rather than at write time. Raw JSONL preserves
+engine-native findings and keeps the on-disk format stable for existing
+tools. Consumers that need presentation-level findings use
+<code>iter_deduped()</code>.</p>
+<h3 id="html-report">HTML report</h3>
+<p><code>report_html.generate_html_report()</code> makes two streaming passes:</p>
+<ol>
+<li>Aggregate totals, impact counts, WCAG criteria, rule summary, and
+incomplete summary.</li>
+<li>Render per-page details and clean page list.</li>
+</ol>
+<p>All page-sourced strings are escaped before entering HTML. Impact
+values are whitelisted before being used in CSS class names.</p>
+<h3 id="llm-report">LLM report</h3>
+<p><code>report_llm.generate_llm_report()</code> is intentionally compact. It groups
+violations by normalized rule id and incompletes by axe <code>messageKey</code>
+when available. Deduped findings may no longer have <code>messageKey</code>, so
+they fall into an <code>(unknown)</code> bucket rather than disappearing.</p>
+<p>HTML snippets from scanned pages are emitted inside fenced code blocks,
+with fence delimiters escaped. This is not a complete prompt-injection
+solution, but it prevents the most direct &quot;break out of the code block&quot;
+failure mode when the report is pasted into an LLM.</p>
+<h2 id="mcp-safety-model">MCP safety model</h2>
+<p>The MCP server is a local tool surface that may be driven by an LLM
+client. It is therefore treated as a security boundary even though it
+runs on the user's machine.</p>
+<p><code>scan_page</code> validates:</p>
+<ul>
+<li>URL is a non-empty string.</li>
+<li>Scheme is <code>http</code> or <code>https</code>.</li>
+<li>Host is present.</li>
+<li>Host does not resolve to private, loopback, link-local, reserved,
+multicast, or unspecified IP space.</li>
+</ul>
+<p>The private-address restriction can be disabled with
+<code>A11Y_CATSCAN_MCP_ALLOW_PRIVATE=1</code>, intended for trusted local tests or
+explicit operator use.</p>
+<p>Report-analysis tools resolve direct paths only when they look like
+report files (<code>.json</code> / <code>.jsonl</code>), or through the scan registry. This
+keeps prompt-injected report requests from becoming arbitrary local
+file reads.</p>
+<h2 id="security-notes">Security notes</h2>
+<ul>
+<li><code>cookies.json</code>, <code>.auth-state.json</code>, local config, reports, virtualenvs,
+and tool caches are gitignored. Tracked credentials are a release
+blocker; if a cookie file ever lands in history, revoke the sessions
+as well as removing the file from the current tree.</li>
+<li><code>yaml.safe_load()</code> is used for config and allowlist files.</li>
+<li>Subprocess execution is list-based, not shell-based.</li>
+<li>Browser cleanup tracks launched browser PIDs and child Chromium
+processes. Manual <code>--cleanup</code> is intentionally narrowed to
+Playwright-looking Chromium processes.</li>
+<li>Output basenames are validated so <code>--name</code> cannot write outside the
+configured output directory.</li>
+<li>MCP <code>scan_page</code> returns scanner setup errors as errors, not as clean
+skipped pages.</li>
+</ul>
+<h2 id="testing-model">Testing model</h2>
+<p>The suite is split between pure helpers and browser-backed tests:</p>
+<ul>
+<li>Pure tests cover URL normalization, allowlist matching, report IO,
+registry/search/diff, grouped summaries, CLI argument behavior, and
+MCP tool JSON shapes.</li>
+<li>Browser tests use Playwright and local HTTP fixture servers to verify
+real engine execution, link extraction, auth plugin behavior, browser
+restart, and one-page MCP scans.</li>
+<li>Signal tests exercise flush/state behavior under SIGTERM and SIGUSR1.</li>
+</ul>
+<p>The project-local command is:</p>
+<pre><code class="language-bash">.venv/bin/pytest -q
+</code></pre>
+<p>In sandboxed environments, browser and local-socket tests may require
+running outside the filesystem/network sandbox because they bind
+<code>127.0.0.1</code> and launch Chromium.</p>
+<h2 id="style">Style</h2>
+<p>Python source follows the existing local style rather than an external
+formatter profile:</p>
+<ul>
+<li>Python 3.12 syntax is allowed and expected.</li>
+<li>Keep modules focused and browser-free where possible.</li>
+<li>Prefer small helper functions over inline ad hoc parsing when the
+behavior is shared by CLI, MCP, and tests.</li>
+<li>Comments explain invariants and failure-mode choices, not obvious
+assignments.</li>
+<li>Streaming readers/writers are preferred for scan-size-dependent data.</li>
+<li>Error handling should make audit integrity explicit: a failed setup
+is not a clean page; a page-specific scan failure is a skipped page
+with a reason.</li>
+</ul>
+<p>The useful local checks are:</p>
+<pre><code class="language-bash">python3.12 -m compileall -q .
+.venv/bin/pytest -q
+npm audit --omit=dev
+</code></pre>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

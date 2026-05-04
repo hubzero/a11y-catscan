@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FAQ | a11y-catscan</title>
+  <meta name="description" content="Short answers for teams adopting a11y-catscan.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="../getting-started/index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item" href="../getting-started/index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item" href="../configuration/index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item" href="../scan-workflows/index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item" href="../authentication/index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item" href="../reports/index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item" href="../mcp/index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item" href="../troubleshooting/index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item" href="../design/index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item" href="../changelog/index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>FAQ</h1>
+          <p class="docs-article__summary">Short answers for teams adopting a11y-catscan.</p>
+          <p class="docs-article__source">FAQ</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#is-this-a-replacement-for-a-human-wcag-audit">Is this a replacement for a human WCAG audit?</a></li>
+<li class="toc__item toc__item--level-2"><a href="#which-engine-should-i-use">Which engine should I use?</a></li>
+<li class="toc__item toc__item--level-2"><a href="#why-are-there-both-violations-and-incompletes">Why are there both violations and incompletes?</a></li>
+<li class="toc__item toc__item--level-2"><a href="#why-does-a-finding-id-look-like-sc-1-4-3">Why does a finding id look like `sc-1.4.3`?</a></li>
+<li class="toc__item toc__item--level-2"><a href="#why-does-jsonl-matter">Why does JSONL matter?</a></li>
+<li class="toc__item toc__item--level-2"><a href="#can-it-scan-logged-in-pages">Can it scan logged-in pages?</a></li>
+<li class="toc__item toc__item--level-2"><a href="#does-it-follow-links-from-url-list-mode">Does it follow links from URL-list mode?</a></li>
+<li class="toc__item toc__item--level-2"><a href="#why-did-mcp-reject-http-127-0-0-1">Why did MCP reject `http://127.0.0.1`?</a></li>
+<li class="toc__item toc__item--level-2"><a href="#can-i-suppress-findings">Can I suppress findings?</a></li>
+<li class="toc__item toc__item--level-2"><a href="#where-should-generated-reports-live">Where should generated reports live?</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<h2 id="is-this-a-replacement-for-a-human-wcag-audit">Is this a replacement for a human WCAG audit?</h2>
+<p>No. It is a scanner and evidence collector. It finds many automated
+failures quickly and gives auditors a structured list of <code>cantTell</code>
+items to review, but WCAG conformance still requires human judgment.</p>
+<h2 id="which-engine-should-i-use">Which engine should I use?</h2>
+<p>Use axe-core for fast iterative work. Use <code>--engine all</code> for baselines
+and audit sweeps where coverage matters more than runtime.</p>
+<h2 id="why-are-there-both-violations-and-incompletes">Why are there both violations and incompletes?</h2>
+<p><code>failed</code> means an automated engine found a definite failure. <code>cantTell</code>
+means the engine could not decide automatically. Incompletes are common
+for contrast checks involving gradients, images, pseudo-elements, and
+overlaps.</p>
+<h2 id="why-does-a-finding-id-look-like-sc-1-4-3">Why does a finding id look like <code>sc-1.4.3</code>?</h2>
+<p>Deduped reports group cross-engine findings by normalized primary tag.
+<code>sc-1.4.3</code> means WCAG Success Criterion 1.4.3, Contrast Minimum.</p>
+<h2 id="why-does-jsonl-matter">Why does JSONL matter?</h2>
+<p>Long scans can produce huge reports. JSONL lets the scanner write one
+complete page result at a time, flush it immediately, and rebuild HTML
+or JSON views later without keeping everything in memory.</p>
+<h2 id="can-it-scan-logged-in-pages">Can it scan logged-in pages?</h2>
+<p>Yes. Write a login plugin that implements <code>async def login(context, config) -&gt; bool</code>, then configure it under <code>auth.login_script</code>.</p>
+<h2 id="does-it-follow-links-from-url-list-mode">Does it follow links from URL-list mode?</h2>
+<p>No. <code>--urls FILE</code> scans exactly those URLs. This is useful for curated
+template samples and regression checks.</p>
+<h2 id="why-did-mcp-reject-http-127-0-0-1">Why did MCP reject <code>http://127.0.0.1</code>?</h2>
+<p>MCP may be driven by an LLM client, so it rejects private/local targets
+by default to avoid SSRF. Use <code>A11Y_CATSCAN_MCP_ALLOW_PRIVATE=1</code> only in
+trusted local test setups.</p>
+<h2 id="can-i-suppress-findings">Can I suppress findings?</h2>
+<p>Yes, with an allowlist YAML. Use it for known-acceptable items and write
+a reason. Avoid suppressing multi-engine confirmed failures unless you
+have manually verified the page.</p>
+<h2 id="where-should-generated-reports-live">Where should generated reports live?</h2>
+<p>Use <code>output_dir</code>, usually <code>./reports</code>. Reports are gitignored by
+default because they can contain page snippets and authenticated URLs.</p>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

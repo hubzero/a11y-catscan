@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reports | a11y-catscan</title>
+  <meta name="description" content="JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="../getting-started/index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item" href="../getting-started/index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item" href="../configuration/index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item" href="../scan-workflows/index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item" href="../authentication/index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item" href="../mcp/index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item" href="../troubleshooting/index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item" href="../faq/index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item" href="../design/index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item" href="../changelog/index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>Reports</h1>
+          <p class="docs-article__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</p>
+          <p class="docs-article__source">Reports</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#output-files">Output files</a></li>
+<li class="toc__item toc__item--level-2"><a href="#earl-outcomes">EARL outcomes</a></li>
+<li class="toc__item toc__item--level-2"><a href="#normalized-tags">Normalized tags</a></li>
+<li class="toc__item toc__item--level-2"><a href="#deduplication">Deduplication</a></li>
+<li class="toc__item toc__item--level-2"><a href="#html-report">HTML report</a></li>
+<li class="toc__item toc__item--level-2"><a href="#llm-report">LLM report</a></li>
+<li class="toc__item toc__item--level-2"><a href="#allowlists">Allowlists</a></li>
+<li class="toc__item toc__item--level-2"><a href="#registry-and-analysis">Registry and analysis</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<p>a11y-catscan writes several report formats from the same scan. JSONL is
+the source of truth; the other files are derived views.</p>
+<h2 id="output-files">Output files</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.jsonl</code></td>
+<td>Streaming results, one JSON object per page</td>
+</tr>
+<tr>
+<td><code>.json</code></td>
+<td>Full combined JSON object for inspection or compatibility</td>
+</tr>
+<tr>
+<td><code>.html</code></td>
+<td>Human-readable report with summaries and per-page details</td>
+</tr>
+<tr>
+<td><code>.md</code></td>
+<td>Compact LLM-oriented summary, only with <code>--llm</code></td>
+</tr>
+<tr>
+<td><code>.state.json</code></td>
+<td>Crawl state for <code>--resume</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="earl-outcomes">EARL outcomes</h2>
+<p>Findings use W3C EARL outcome names:</p>
+<table>
+<thead>
+<tr>
+<th>Outcome</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>failed</code></td>
+<td>Definite automated failure</td>
+</tr>
+<tr>
+<td><code>cantTell</code></td>
+<td>Needs manual review</td>
+</tr>
+<tr>
+<td><code>passed</code></td>
+<td>Rule passed</td>
+</tr>
+<tr>
+<td><code>inapplicable</code></td>
+<td>Rule does not apply</td>
+</tr>
+</tbody>
+</table>
+<p>The summary counts focus on <code>failed</code> and <code>cantTell</code>.</p>
+<h2 id="normalized-tags">Normalized tags</h2>
+<table>
+<thead>
+<tr>
+<th>Tag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sc-1.4.3</code></td>
+<td>WCAG Success Criterion</td>
+</tr>
+<tr>
+<td><code>aria-valid-attrs</code></td>
+<td>ARIA category</td>
+</tr>
+<tr>
+<td><code>bp-landmarks</code></td>
+<td>Best-practice category</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>sc-</code> prefix means &quot;Success Criterion.&quot; It is separate from native
+engine tags like <code>wcag21aa</code>, which describe WCAG version and level.</p>
+<h2 id="deduplication">Deduplication</h2>
+<p>Raw JSONL preserves engine-native results. Report readers apply
+cross-engine deduplication by:</p>
+<pre><code class="language-text">(selector, primary_tag, outcome)
+</code></pre>
+<p>Merged findings keep an <code>engines</code> dictionary. For example, one contrast
+failure might show axe and IBM attribution if both tools confirmed it.</p>
+<h2 id="html-report">HTML report</h2>
+<p>Use the HTML report for audit review:</p>
+<ul>
+<li>impact breakdown</li>
+<li>WCAG criteria table</li>
+<li>violation summary by rule</li>
+<li>incomplete summary</li>
+<li>per-page details</li>
+<li>selectors, snippets, and messages</li>
+<li>clean page list</li>
+</ul>
+<p>All scanned page snippets are escaped before rendering.</p>
+<h2 id="llm-report">LLM report</h2>
+<p>Use <code>--llm</code> for a compact Markdown summary:</p>
+<pre><code class="language-sh">./a11y-catscan.py --llm https://example.com/
+</code></pre>
+<p>The Markdown groups repeated failures and includes representative HTML.
+It is meant to help find the source template or component. It is not a
+replacement for the full report.</p>
+<h2 id="allowlists">Allowlists</h2>
+<p>Use an allowlist for known-acceptable findings, especially
+engine-specific <code>cantTell</code> items:</p>
+<pre><code class="language-yaml">- rule: color-contrast
+  url: /homepage
+  outcome: cantTell
+  reason: chart library renders gradient background; manual contrast checked
+</code></pre>
+<p>Supported filters:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rule</code></td>
+<td>Normalized finding id, required</td>
+</tr>
+<tr>
+<td><code>url</code></td>
+<td>URL substring</td>
+</tr>
+<tr>
+<td><code>target</code></td>
+<td>selector/target substring</td>
+</tr>
+<tr>
+<td><code>engine</code></td>
+<td>only suppress this engine when it is the sole engine</td>
+</tr>
+<tr>
+<td><code>outcome</code></td>
+<td><code>failed</code> or <code>cantTell</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>human explanation</td>
+</tr>
+</tbody>
+</table>
+<p>Engine-filtered allowlist entries do not suppress multi-engine
+confirmed findings.</p>
+<p>Run with:</p>
+<pre><code class="language-sh">./a11y-catscan.py --allowlist allowlist.yaml https://example.com/
+</code></pre>
+<h2 id="registry-and-analysis">Registry and analysis</h2>
+<p>Completed scans are registered by name when a basename is available.
+Useful analysis commands:</p>
+<pre><code class="language-sh">./a11y-catscan.py --list-scans
+./a11y-catscan.py --name baseline --page-status https://example.com/page
+./a11y-catscan.py --name baseline --search sc:1.4.3
+./a11y-catscan.py --name baseline --search sel:*main-nav*
+</code></pre>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

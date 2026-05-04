@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">a11y-catscan logo</title>
+  <desc id="desc">A simplified scan target with accessibility check marks.</desc>
+  <rect width="96" height="96" rx="20" fill="#10212a"/>
+  <circle cx="48" cy="48" r="28" fill="none" stroke="#7fd7c4" stroke-width="6"/>
+  <path d="M48 16v14M48 66v14M16 48h14M66 48h14" stroke="#f2c94c" stroke-width="6" stroke-linecap="round"/>
+  <path d="M36 48l8 8 18-22" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="48" cy="48" r="42" fill="none" stroke="#ffffff" stroke-opacity=".16" stroke-width="2"/>
+</svg>

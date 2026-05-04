@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configuration | a11y-catscan</title>
+  <meta name="description" content="YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="../getting-started/index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item" href="../getting-started/index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item" href="../scan-workflows/index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item" href="../authentication/index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item" href="../reports/index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item" href="../mcp/index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item" href="../troubleshooting/index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item" href="../faq/index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item" href="../design/index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item" href="../changelog/index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>Configuration</h1>
+          <p class="docs-article__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</p>
+          <p class="docs-article__source">Configuration</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#minimal-config">Minimal config</a></li>
+<li class="toc__item toc__item--level-2"><a href="#engines">Engines</a></li>
+<li class="toc__item toc__item--level-2"><a href="#wcag-levels">WCAG levels</a></li>
+<li class="toc__item toc__item--level-2"><a href="#url-scope">URL scope</a></li>
+<li class="toc__item toc__item--level-2"><a href="#query-normalization">Query normalization</a></li>
+<li class="toc__item toc__item--level-2"><a href="#output-names-and-directories">Output names and directories</a></li>
+<li class="toc__item toc__item--level-2"><a href="#performance-settings">Performance settings</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<p>Configuration lives in <code>a11y-catscan.yaml</code>. Copy the example and edit it
+for the site being audited:</p>
+<pre><code class="language-sh">cp a11y-catscan.yaml.example a11y-catscan.yaml
+</code></pre>
+<p>The local config is gitignored. Command-line flags override YAML values
+for the current run.</p>
+<h2 id="minimal-config">Minimal config</h2>
+<pre><code class="language-yaml">url: https://example.com/
+level: wcag21aa
+max_pages: 50
+output_dir: ./reports
+
+exclude_paths:
+  - /login
+  - /api
+  - /administrator
+</code></pre>
+<p>Then run:</p>
+<pre><code class="language-sh">./a11y-catscan.py
+</code></pre>
+<p>The positional URL wins over <code>url</code> in the file:</p>
+<pre><code class="language-sh">./a11y-catscan.py https://staging.example.com/
+</code></pre>
+<h2 id="engines">Engines</h2>
+<table>
+<thead>
+<tr>
+<th>Engine</th>
+<th>CLI value</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>axe-core</td>
+<td><code>axe</code></td>
+<td>Default engine. Strong broad coverage, especially contrast, names, labels, ARIA, structure</td>
+</tr>
+<tr>
+<td>Siteimprove Alfa</td>
+<td><code>alfa</code></td>
+<td>ACT-rule engine, run through a Node.js subprocess</td>
+</tr>
+<tr>
+<td>IBM Equal Access</td>
+<td><code>ibm</code></td>
+<td>IBM Accessibility Checker rule set</td>
+</tr>
+<tr>
+<td>HTML_CodeSniffer</td>
+<td><code>htmlcs</code></td>
+<td>Older but useful WCAG-oriented sniff rules</td>
+</tr>
+<tr>
+<td>All engines</td>
+<td><code>all</code></td>
+<td>Expensive, but best for baseline audits</td>
+</tr>
+</tbody>
+</table>
+<p>Set one engine in YAML:</p>
+<pre><code class="language-yaml">engine: axe
+</code></pre>
+<p>Or select several on the command line:</p>
+<pre><code class="language-sh">./a11y-catscan.py --engine axe,alfa,ibm https://example.com/
+</code></pre>
+<h2 id="wcag-levels">WCAG levels</h2>
+<p>Common values:</p>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wcag2a</code></td>
+<td>WCAG 2.0 Level A</td>
+</tr>
+<tr>
+<td><code>wcag2aa</code></td>
+<td>WCAG 2.0 Level AA</td>
+</tr>
+<tr>
+<td><code>wcag21aa</code></td>
+<td>WCAG 2.1 Level AA, the default</td>
+</tr>
+<tr>
+<td><code>wcag22aa</code></td>
+<td>WCAG 2.2 Level AA</td>
+</tr>
+<tr>
+<td><code>best</code></td>
+<td>WCAG 2.1 AA plus best-practice rules</td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-sh">./a11y-catscan.py --level wcag22aa https://example.com/
+</code></pre>
+<p>Best-practice rules are not counted as WCAG compliance failures unless
+you explicitly use <code>--level best</code>.</p>
+<h2 id="url-scope">URL scope</h2>
+<p>Use include paths to restrict a crawl:</p>
+<pre><code class="language-yaml">include_paths:
+  - /docs
+  - /support
+</code></pre>
+<p>Use exclude paths for known non-content or destructive routes:</p>
+<pre><code class="language-yaml">exclude_paths:
+  - /login
+  - /logout
+  - /api
+  - /administrator
+</code></pre>
+<p>Use regex sparingly for families of internal pages:</p>
+<pre><code class="language-yaml">exclude_regex:
+  - ^/internal/[^/]+/(admin|settings|logs)(/|$)
+</code></pre>
+<h2 id="query-normalization">Query normalization</h2>
+<p><code>strip_query_params</code> reduces duplicate URLs that render the same page
+template:</p>
+<pre><code class="language-yaml">strip_query_params:
+  - sort
+  - sortdir
+  - limit
+  - start
+</code></pre>
+<p>Path-conditional stripping is useful when a parameter is meaningful on
+one route but just a filter on another:</p>
+<pre><code class="language-yaml">strip_query_params:
+  - path: ^/(tags|resources)
+    querystring: [parent, area]
+</code></pre>
+<h2 id="output-names-and-directories">Output names and directories</h2>
+<pre><code class="language-sh">./a11y-catscan.py --name baseline --output-dir reports https://example.com/
+</code></pre>
+<p>This writes:</p>
+<pre><code class="language-text">reports/baseline.json
+reports/baseline.jsonl
+reports/baseline.html
+</code></pre>
+<p><code>--name</code> is a filename, not a path. Use <code>--output-dir</code> for directories.</p>
+<h2 id="performance-settings">Performance settings</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th style="text-align:right">Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>workers</code></td>
+<td style="text-align:right"><code>1</code></td>
+<td>Parallel page scans</td>
+</tr>
+<tr>
+<td><code>wait_until</code></td>
+<td style="text-align:right"><code>networkidle</code></td>
+<td>Playwright navigation strategy</td>
+</tr>
+<tr>
+<td><code>page_wait</code></td>
+<td style="text-align:right"><code>1</code></td>
+<td>Extra wait after load when not using <code>networkidle</code></td>
+</tr>
+<tr>
+<td><code>save_every</code></td>
+<td style="text-align:right"><code>25</code></td>
+<td>Flush derived reports every N pages</td>
+</tr>
+<tr>
+<td><code>restart_every</code></td>
+<td style="text-align:right"><code>500</code></td>
+<td>Restart Chromium to control memory growth</td>
+</tr>
+<tr>
+<td><code>niceness</code></td>
+<td style="text-align:right"><code>10</code></td>
+<td>Lower process CPU priority</td>
+</tr>
+<tr>
+<td><code>oom_score_adj</code></td>
+<td style="text-align:right"><code>1000</code></td>
+<td>Prefer scanner for Linux OOM killing</td>
+</tr>
+</tbody>
+</table>
+<p>For large sites, raise workers slowly and watch memory:</p>
+<pre><code class="language-sh">./a11y-catscan.py --workers 4 --max-pages 1000 https://example.com/
+</code></pre>
+<p>Alfa scans serialize internally, so <code>--engine all</code> will not scale
+linearly with worker count.</p>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

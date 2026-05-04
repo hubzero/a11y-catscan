@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Troubleshooting | a11y-catscan</title>
+  <meta name="description" content="Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="../getting-started/index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item" href="../getting-started/index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item" href="../configuration/index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item" href="../scan-workflows/index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item" href="../authentication/index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item" href="../reports/index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item" href="../mcp/index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item" href="../faq/index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item" href="../design/index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item" href="../changelog/index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>Troubleshooting</h1>
+          <p class="docs-article__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</p>
+          <p class="docs-article__source">Troubleshooting</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#axe-core-not-found">axe-core not found</a></li>
+<li class="toc__item toc__item--level-2"><a href="#browser-launch-fails">Browser launch fails</a></li>
+<li class="toc__item toc__item--level-2"><a href="#a-scan-is-clean-but-should-not-be">A scan is clean but should not be</a></li>
+<li class="toc__item toc__item--level-2"><a href="#crawling-stops-early">Crawling stops early</a></li>
+<li class="toc__item toc__item--level-2"><a href="#authenticated-scan-keeps-logging-out">Authenticated scan keeps logging out</a></li>
+<li class="toc__item toc__item--level-2"><a href="#reports-are-too-large">Reports are too large</a></li>
+<li class="toc__item toc__item--level-2"><a href="#too-many-color-contrast-incompletes">Too many color-contrast incompletes</a></li>
+<li class="toc__item toc__item--level-2"><a href="#mcp-rejects-local-urls">MCP rejects local URLs</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<p>This page lists the failure modes people usually hit first.</p>
+<h2 id="axe-core-not-found">axe-core not found</h2>
+<p>Symptom:</p>
+<pre><code class="language-text">ERROR: axe-core not found
+Run: npm install
+</code></pre>
+<p>Fix:</p>
+<pre><code class="language-sh">npm install
+</code></pre>
+<p>The engine JavaScript files live under <code>node_modules/</code>. Python
+dependencies alone are not enough.</p>
+<h2 id="browser-launch-fails">Browser launch fails</h2>
+<p>Install the Playwright browser:</p>
+<pre><code class="language-sh">python3.12 -m playwright install chromium
+</code></pre>
+<p>In containers or restricted sandboxes, Chromium may need additional OS
+packages or permission to create namespaces, sockets, and temporary
+profiles. Run the browser tests outside the sandbox when validating the
+project:</p>
+<pre><code class="language-sh">.venv/bin/pytest -q
+</code></pre>
+<h2 id="a-scan-is-clean-but-should-not-be">A scan is clean but should not be</h2>
+<p>Check whether the page was skipped:</p>
+<ul>
+<li>HTTP status 4xx/5xx</li>
+<li>non-HTML content type</li>
+<li>tiny / empty response</li>
+<li>redirect off origin</li>
+<li>no engine results</li>
+</ul>
+<p>Recent versions fail closed when every selected engine fails to start.
+If only one engine is noisy, try a second engine to compare:</p>
+<pre><code class="language-sh">./a11y-catscan.py --page --engine axe,htmlcs https://example.com/page
+</code></pre>
+<h2 id="crawling-stops-early">Crawling stops early</h2>
+<p>Common reasons:</p>
+<ul>
+<li><code>max_pages</code> reached.</li>
+<li>robots.txt disallowed the path.</li>
+<li>include/exclude filters removed discovered links.</li>
+<li>all discovered links were off-origin.</li>
+<li>skipped extensions removed non-HTML resources.</li>
+</ul>
+<p>Use verbose output:</p>
+<pre><code class="language-sh">./a11y-catscan.py -v --max-pages 50 https://example.com/
+</code></pre>
+<h2 id="authenticated-scan-keeps-logging-out">Authenticated scan keeps logging out</h2>
+<p>Add obvious logout paths to the plugin:</p>
+<pre><code class="language-python">exclude_paths = [&quot;/logout&quot;, &quot;/users/logout&quot;]
+</code></pre>
+<p>If recovery still triggers, inspect the saved <code>.state.json</code> file for
+<code>logout_urls</code>. These are URLs the recovery cycle identified as session
+breakers.</p>
+<h2 id="reports-are-too-large">Reports are too large</h2>
+<p>Use the streaming JSONL and LLM summary:</p>
+<pre><code class="language-sh">./a11y-catscan.py --llm --max-pages 500 https://example.com/
+</code></pre>
+<p>For analysis, prefer:</p>
+<pre><code class="language-sh">./a11y-catscan.py --group-by selector --name baseline
+./a11y-catscan.py --search sc:1.4.3 --name baseline
+</code></pre>
+<h2 id="too-many-color-contrast-incompletes">Too many color-contrast incompletes</h2>
+<p>Automated contrast engines struggle with gradients, images,
+pseudo-elements, overlays, and clipped text. Options:</p>
+<ul>
+<li>Add explicit fallback <code>background-color</code> in CSS.</li>
+<li>Verify manually and allowlist known false positives.</li>
+<li>Group by reason to find repeated patterns:</li>
+</ul>
+<pre><code class="language-sh">./a11y-catscan.py --group-by reason --name baseline
+</code></pre>
+<h2 id="mcp-rejects-local-urls">MCP rejects local URLs</h2>
+<p>By default, MCP <code>scan_page</code> rejects private and loopback targets to
+avoid SSRF. For trusted local testing:</p>
+<pre><code class="language-sh">A11Y_CATSCAN_MCP_ALLOW_PRIVATE=1 python3.12 mcp_server.py
+</code></pre>
+<p>Keep that override out of shared MCP configurations.</p>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

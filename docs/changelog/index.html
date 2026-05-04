@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Changelog | a11y-catscan</title>
+  <meta name="description" content="Shipped milestones and hardening notes.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="../getting-started/index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item" href="../getting-started/index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item" href="../configuration/index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item" href="../scan-workflows/index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item" href="../authentication/index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item" href="../reports/index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item" href="../mcp/index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item" href="../troubleshooting/index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item" href="../faq/index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item" href="../design/index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>Changelog</h1>
+          <p class="docs-article__summary">Shipped milestones and hardening notes.</p>
+          <p class="docs-article__source">Changelog</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#2026-05-04">2026-05-04</a></li>
+<li class="toc__item toc__item--level-3"><a href="#added">Added</a></li>
+<li class="toc__item toc__item--level-3"><a href="#changed">Changed</a></li>
+<li class="toc__item toc__item--level-3"><a href="#fixed">Fixed</a></li>
+<li class="toc__item toc__item--level-3"><a href="#hygiene">Hygiene</a></li>
+<li class="toc__item toc__item--level-2"><a href="#2026-04-21">2026-04-21</a></li>
+<li class="toc__item toc__item--level-3"><a href="#added-2">Added</a></li>
+<li class="toc__item toc__item--level-3"><a href="#changed-2">Changed</a></li>
+<li class="toc__item toc__item--level-3"><a href="#fixed-2">Fixed</a></li>
+<li class="toc__item toc__item--level-3"><a href="#removed">Removed</a></li>
+<li class="toc__item toc__item--level-2"><a href="#2026-04-20">2026-04-20</a></li>
+<li class="toc__item toc__item--level-3"><a href="#added-3">Added</a></li>
+<li class="toc__item toc__item--level-3"><a href="#changed-3">Changed</a></li>
+<li class="toc__item toc__item--level-3"><a href="#fixed-3">Fixed</a></li>
+<li class="toc__item toc__item--level-2"><a href="#2026-04-19-and-earlier">2026-04-19 and earlier</a></li>
+<li class="toc__item toc__item--level-3"><a href="#added-4">Added</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<h2 id="2026-05-04">2026-05-04</h2>
+<h3 id="added">Added</h3>
+<ul>
+<li><code>pyproject.toml</code> with Python 3.12 runtime metadata, pinned runtime
+dependency ranges, and a dev extra for pytest / coverage / audit
+tooling. The CLI remains the executable <code>a11y-catscan.py</code> script
+rather than a console-entry-point package because it is meant to run
+beside its <code>node_modules/</code> and bundled engine assets.</li>
+<li>Focused test suite around the split modules: crawl loop behavior,
+signal handling, report streaming, registry/search/diff helpers,
+MCP tools, engine mappings, browser lifecycle, auth lifecycle, and
+normalizer behavior. The suite now exercises the library API and the
+CLI-import path instead of treating the project as one monolithic
+script.</li>
+<li>Session-expiry recovery for authenticated crawls. When a login plugin
+reports <code>session_active=False</code>, in-flight workers drain, the scanner
+re-authenticates, suspect URLs are tested serially, logout traps are
+banned, and safe suspects are requeued for a normal scan.</li>
+<li>Recovery circuit breaker. If re-login fails during recovery, suspect
+URLs are banned and further recovery is disabled for that run so the
+crawl does not loop forever on every subsequent page.</li>
+<li>MCP hardening:
+<ul>
+<li><code>scan_page</code> rejects non-HTTP schemes and, by default, private,
+loopback, link-local, reserved, multicast, and unspecified targets.
+This prevents the MCP surface from becoming an SSRF primitive.</li>
+<li>Report references are resolved through report-shaped files
+(<code>.json</code> / <code>.jsonl</code>) or the scan registry instead of arbitrary local
+paths.</li>
+<li>Scanner infrastructure errors are surfaced as <code>clean: false</code> tool
+responses rather than clean-looking skipped pages.</li>
+</ul>
+</li>
+</ul>
+<h3 id="changed">Changed</h3>
+<ul>
+<li><code>a11y-catscan.py</code> was reduced back to a CLI coordinator. The browser
+lifecycle, crawling, URL utilities, reports, registry, allowlist, and
+result helpers now live in focused modules:
+<ul>
+<li><code>scanner.py</code>: reusable async scanner and auth lifecycle.</li>
+<li><code>crawl.py</code>: crawl frontier, worker sliding window, signal handling,
+streaming writes, browser restarts.</li>
+<li><code>crawl_utils.py</code>: URL normalization, robots.txt, HTTP probes,
+cookie loading, browser cleanup.</li>
+<li><code>report_*.py</code>: HTML, LLM, grouped, diff, and streaming report
+concerns.</li>
+<li><code>registry.py</code>: named scans plus search / page-status / structured
+diff for CLI and MCP consumers.</li>
+</ul>
+</li>
+<li>Codebase modernized to Python 3.12 idioms: native generic type
+annotations, <code>match</code> where it clarifies dispatch, dataclasses for
+running totals, and narrower helper modules instead of broad
+underscore alias layers.</li>
+<li>The crawl loop now keeps a single JSONL file handle open for the run.
+Results are still written by one main-loop writer only; worker tasks
+return complete page records. This preserves the invariant that each
+JSONL line is one complete page result with no interleaving.</li>
+<li>Report flushing uses streaming JSONL reads to build final JSON / HTML
+outputs. Large scans stay bounded in memory; the final JSON is a
+convenience product, not the source of truth.</li>
+<li>Engine startup is fail-closed when all selected engines fail to start.
+A missing <code>node_modules/</code>, broken browser launch, or bad engine setup
+no longer produces a clean-looking scan.</li>
+<li><code>--cleanup</code> now targets Playwright-launched Chromium processes rather
+than every same-user process whose command name contains <code>chrome</code>.</li>
+<li><code>--name</code> / <code>--output</code> is restricted to a basename. Output names cannot
+use absolute paths or <code>../</code> traversal to escape <code>output_dir</code>.</li>
+<li>LLM markdown report examples now escape Markdown fence delimiters in
+scanned HTML snippets. This keeps page content from breaking out of
+the example block and becoming instructions to the downstream LLM.</li>
+</ul>
+<h3 id="fixed">Fixed</h3>
+<ul>
+<li>Five correctness / exception-handling issues from the refactor arc:
+report path suffix handling, corrupt-line tolerance, state-file
+writes, skipped-page accounting, and subprocess/browser shutdown
+noise paths.</li>
+<li>Session plugin exceptions during <code>check_session</code> now emit a warning
+instead of silently disabling session-expiry detection.</li>
+<li>After <code>restart_browser()</code>, failed re-login no longer leaves the
+scanner pointing at a closed authenticated context.</li>
+<li>Alfa browser restart no longer starts Alfa twice. Alfa owns the
+Playwright browser server; restart connects Python to that server and
+skips Alfa in the second engine-start loop.</li>
+<li>LLM report incompletes render an <code>(unknown)</code> bucket when deduped
+findings no longer carry axe's <code>data.messageKey</code>. The section no
+longer disappears for valid <code>cantTell</code> results.</li>
+<li>Committed <code>cookies.json</code> was removed from the repository. The file
+was already ignored but had been tracked; any sessions contained in
+earlier history should still be revoked if the repository was shared.</li>
+</ul>
+<h3 id="hygiene">Hygiene</h3>
+<ul>
+<li>
+<p><code>compileall</code>, full pytest, and npm audit were run after the hardening
+pass:</p>
+<pre><code>python3.12 -m compileall -q .
+.venv/bin/pytest -q      # 368 passed
+npm audit --omit=dev     # found 0 vulnerabilities
+</code></pre>
+</li>
+<li>
+<p>Test ownership was tightened around fixtures and local HTTP servers:
+generated fixture files live under <code>tmp_path</code>, registry writes are
+isolated, and browser tests are marked separately from pure helpers.</p>
+</li>
+<li>
+<p>Playwright shutdown noise is filtered in both production crawl runs
+and the pytest harness, but real task/browser exceptions remain
+visible.</p>
+</li>
+</ul>
+<h2 id="2026-04-21">2026-04-21</h2>
+<h3 id="added-2">Added</h3>
+<ul>
+<li><code>Scanner</code> class: reusable async library API for one-page scans. It
+owns Playwright startup/shutdown, engine startup, authentication
+context, per-page tab creation, element resolution, and structured
+page results. The CLI crawl loop and MCP server now share this path.</li>
+<li>MCP stdio server mode (<code>a11y-catscan.py --mcp</code> / <code>mcp_server.py</code>) for
+quick tool calls:
+<ul>
+<li><code>scan_page</code></li>
+<li><code>analyze_report</code></li>
+<li><code>list_engines</code></li>
+<li><code>lookup_wcag</code></li>
+<li><code>find_issues</code></li>
+<li><code>check_page</code></li>
+<li><code>compare_scans</code></li>
+<li><code>manage_scans</code></li>
+</ul>
+</li>
+<li>Named scan registry under <code>reports/scans.json</code>. Completed scans can
+be listed, looked up by name, searched, checked by page URL, compared
+structurally, and deleted from the registry without deleting report
+files.</li>
+<li>Human-friendly search aliases for WCAG Success Criteria. Search
+accepts canonical SC numbers, <code>sc-*</code> tags, and known slug aliases for
+common criteria.</li>
+</ul>
+<h3 id="changed-2">Changed</h3>
+<ul>
+<li>CLI crawl loop now uses <code>Scanner</code> instead of inline browser/engine
+code. The CLI owns crawling and persistence; the scanner owns
+&quot;navigate this page and normalize engine findings.&quot;</li>
+<li>Alfa architecture was hardened: the Node.js subprocess launches
+Chromium via Playwright <code>launchServer()</code> and returns a GUID-protected
+WebSocket endpoint. Python connects to that endpoint; there is no open
+CDP debug port.</li>
+<li>Alfa rule filtering now respects both WCAG level and WCAG version.
+<code>wcag21aa</code> does not include WCAG 2.2 criteria simply because they are
+AA.</li>
+<li>Best-practice and ARIA findings are separated from strict WCAG
+failures in summary counts. <code>--level best</code> explicitly opts best
+practices into the compliance total.</li>
+<li>The normalized Success Criterion tag prefix changed from <code>wcag-</code> to
+<code>sc-</code> to distinguish success criteria from WCAG version / level tags.</li>
+<li>Engine-aware allowlist matching. A single-engine allowlist entry will
+not suppress a multi-engine confirmed finding.</li>
+<li>IBM landmark / ARIA naming findings were reclassified from WCAG into
+the ARIA bucket where IBM's native mapping would otherwise inflate
+WCAG totals.</li>
+</ul>
+<h3 id="fixed-2">Fixed</h3>
+<ul>
+<li>Alfa selector resolution handles text-node targets, id/class/tag
+fallbacks, and iterator materialization correctly. Findings now point
+at useful CSS selectors instead of unstable or empty targets.</li>
+<li>Alfa <code>cantTell</code> messages are extracted from ACT expectations and
+preserved in normalized results.</li>
+<li>Alfa page discovery no longer relies solely on CDP page identity; the
+subprocess can navigate in its own context when needed.</li>
+<li>Playwright / Alfa shutdown cleanup suppresses harmless
+<code>TargetClosedError</code> / <code>Event loop is closed</code> traces during process
+teardown.</li>
+</ul>
+<h3 id="removed">Removed</h3>
+<ul>
+<li><code>scan_site</code> was removed from the MCP surface. Full crawls are
+intentionally CLI work: they are long-running, write multiple output
+files, and benefit from signal handling and resume state. MCP tools
+stay quick and bounded.</li>
+<li>Dead code, stale comments, deprecated <code>aria-usage</code> category remnants,
+and temporary refactor aliases were pruned.</li>
+</ul>
+<h2 id="2026-04-20">2026-04-20</h2>
+<h3 id="added-3">Added</h3>
+<ul>
+<li>Multi-engine architecture:
+<ul>
+<li><code>axe</code>: axe-core browser injection.</li>
+<li><code>alfa</code>: Siteimprove Alfa via Node.js / Playwright.</li>
+<li><code>ibm</code>: IBM Equal Access browser injection.</li>
+<li><code>htmlcs</code>: HTML_CodeSniffer browser injection.</li>
+</ul>
+</li>
+<li><code>engines/</code> package with one implementation module per scanner plus a
+shared <code>Engine</code> base class and factory.</li>
+<li><code>engine_mappings.py</code>: WCAG Success Criterion metadata, IBM rule
+mappings, best-practice categories, ARIA categories, HTMLCS code
+parsing, and EARL outcome constants.</li>
+<li>EARL outcome normalization across engines:
+<ul>
+<li><code>failed</code></li>
+<li><code>cantTell</code></li>
+<li><code>passed</code></li>
+<li><code>inapplicable</code></li>
+</ul>
+</li>
+<li>Cross-engine deduplication. Findings that share
+<code>(selector, primary_tag, outcome)</code> merge into one finding with
+<code>engines</code> attribution and the highest impact preserved.</li>
+<li><code>--group-by</code> modes for <code>level</code> and <code>engine</code>, extending existing
+grouping by rule, selector, color, reason, WCAG, and best-practice
+category.</li>
+<li><code>--level best</code>: WCAG 2.1 AA plus best-practice checks.</li>
+<li>Comma-separated <code>--engine</code> syntax (<code>--engine axe,alfa,ibm</code>) plus
+<code>--engine all</code>.</li>
+</ul>
+<h3 id="changed-3">Changed</h3>
+<ul>
+<li>Project renamed to <code>a11y-catscan</code>; remaining <code>axe-spyder</code>
+references were removed from YAML and lockfile metadata.</li>
+<li>Report consumers switched to <code>iter_deduped()</code> so HTML, LLM, group,
+search, page-status, and diff views all read a consistent
+cross-engine shape.</li>
+<li>JSONL write path documents and enforces the single-writer invariant:
+one complete page result per line, written from the main event loop.</li>
+<li>URL / element normalization moved toward engine-independent data:
+engine-native CSS selectors, XPath, and Alfa target descriptions are
+resolved against the live DOM into stable CSS selectors.</li>
+</ul>
+<h3 id="fixed-3">Fixed</h3>
+<ul>
+<li>HTML_CodeSniffer engine support was added and normalized to the same
+EARL / SC tag vocabulary as the other engines.</li>
+<li>Strict WCAG filtering prevents best-practice-only rules from being
+counted as compliance failures unless requested.</li>
+<li>Multiple-engine CLI parsing was simplified after an initial repeatable
+flag design; comma-separated values became the stable surface.</li>
+</ul>
+<h2 id="2026-04-19-and-earlier">2026-04-19 and earlier</h2>
+<h3 id="added-4">Added</h3>
+<ul>
+<li>Original axe-based crawler and report generator: Playwright/Chromium
+navigation, same-origin URL discovery, robots.txt support, skip
+extension filtering, HTML/JSON output, quiet/verbose modes, and
+single-page verification.</li>
+<li>JSONL streaming format and resume-oriented crawl state. Long scans can
+be interrupted, flushed, and resumed without holding all results in
+memory.</li>
+<li>Allowlist YAML for known-acceptable incompletes, initially rule/url/
+target based and later extended with engine/outcome filters.</li>
+<li>LLM-oriented markdown summary for feeding concise scan findings into
+remediation workflows.</li>
+</ul>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

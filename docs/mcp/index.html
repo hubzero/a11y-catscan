@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MCP tools | a11y-catscan</title>
+  <meta name="description" content="Claude Code / MCP integration, tool list, safety model, and local setup.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="../getting-started/index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item" href="../getting-started/index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item" href="../configuration/index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item" href="../scan-workflows/index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item" href="../authentication/index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item" href="../reports/index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item" href="../troubleshooting/index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item" href="../faq/index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item" href="../design/index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item" href="../changelog/index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>MCP tools</h1>
+          <p class="docs-article__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</p>
+          <p class="docs-article__source">MCP tools</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#start-the-server">Start the server</a></li>
+<li class="toc__item toc__item--level-2"><a href="#tools">Tools</a></li>
+<li class="toc__item toc__item--level-2"><a href="#safety-boundaries">Safety boundaries</a></li>
+<li class="toc__item toc__item--level-2"><a href="#when-to-use-the-cli-instead">When to use the CLI instead</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<p>a11y-catscan includes an MCP stdio server for Claude Code and other MCP
+clients. It is for quick one-page scans and report analysis, not
+long-running crawls.</p>
+<h2 id="start-the-server">Start the server</h2>
+<p>Either command starts the same tool server:</p>
+<pre><code class="language-sh">python3.12 mcp_server.py
+./a11y-catscan.py --mcp
+</code></pre>
+<p>Example MCP configuration:</p>
+<pre><code class="language-json">{
+  &quot;mcpServers&quot;: {
+    &quot;wcag-audit&quot;: {
+      &quot;type&quot;: &quot;stdio&quot;,
+      &quot;command&quot;: &quot;python3.12&quot;,
+      &quot;args&quot;: [&quot;/path/to/a11y-catscan/mcp_server.py&quot;]
+    }
+  }
+}
+</code></pre>
+<h2 id="tools">Tools</h2>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scan_page</code></td>
+<td>Scan one HTTP/HTTPS page and return flattened findings</td>
+</tr>
+<tr>
+<td><code>analyze_report</code></td>
+<td>Group findings from a report</td>
+</tr>
+<tr>
+<td><code>list_engines</code></td>
+<td>Show engine versions and install status</td>
+</tr>
+<tr>
+<td><code>lookup_wcag</code></td>
+<td>Look up a Success Criterion</td>
+</tr>
+<tr>
+<td><code>find_issues</code></td>
+<td>Search a report by SC, URL, selector, outcome, or engine</td>
+</tr>
+<tr>
+<td><code>check_page</code></td>
+<td>Check one URL inside a report</td>
+</tr>
+<tr>
+<td><code>compare_scans</code></td>
+<td>Structured diff between two reports</td>
+</tr>
+<tr>
+<td><code>manage_scans</code></td>
+<td>List, get, or delete registry entries</td>
+</tr>
+</tbody>
+</table>
+<h2 id="safety-boundaries">Safety boundaries</h2>
+<p>The MCP server may be driven by an LLM, so it validates inputs more
+strictly than the CLI:</p>
+<ul>
+<li><code>scan_page</code> accepts only <code>http</code> and <code>https</code>.</li>
+<li>Private, loopback, link-local, reserved, multicast, and unspecified
+scan targets are rejected by default.</li>
+<li>Report tools resolve report-like files (<code>.json</code>, <code>.jsonl</code>) or
+registered scan names, not arbitrary local files.</li>
+</ul>
+<p>For trusted local testing only, you can allow private addresses:</p>
+<pre><code class="language-sh">A11Y_CATSCAN_MCP_ALLOW_PRIVATE=1 python3.12 mcp_server.py
+</code></pre>
+<p>Do not use that override for an MCP server exposed to untrusted prompts
+or shared clients.</p>
+<h2 id="when-to-use-the-cli-instead">When to use the CLI instead</h2>
+<p>Use the CLI for:</p>
+<ul>
+<li>full crawls</li>
+<li>authenticated scans</li>
+<li>resume state</li>
+<li>periodic flushing</li>
+<li>signal handling</li>
+<li>output file generation</li>
+</ul>
+<p>MCP tools are best for quick answers while you are working in a codebase:
+&quot;does this page still fail?&quot;, &quot;which reports mention SC 1.4.3?&quot;, or
+&quot;what does this criterion mean?&quot;</p>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

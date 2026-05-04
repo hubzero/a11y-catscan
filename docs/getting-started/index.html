@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Getting started | a11y-catscan</title>
+  <meta name="description" content="Install dependencies, run a first scan, and read the generated reports.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item" href="../configuration/index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item" href="../scan-workflows/index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item" href="../authentication/index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item" href="../reports/index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item" href="../mcp/index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item" href="../troubleshooting/index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item" href="../faq/index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item" href="../design/index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item" href="../changelog/index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>Getting started</h1>
+          <p class="docs-article__summary">Install dependencies, run a first scan, and read the generated reports.</p>
+          <p class="docs-article__source">Getting started</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#prerequisites">Prerequisites</a></li>
+<li class="toc__item toc__item--level-2"><a href="#first-scan">First scan</a></li>
+<li class="toc__item toc__item--level-2"><a href="#run-all-engines">Run all engines</a></li>
+<li class="toc__item toc__item--level-2"><a href="#quick-page-verification">Quick page verification</a></li>
+<li class="toc__item toc__item--level-2"><a href="#generate-an-llm-summary">Generate an LLM summary</a></li>
+<li class="toc__item toc__item--level-2"><a href="#respect-robots-txt">Respect robots.txt</a></li>
+<li class="toc__item toc__item--level-2"><a href="#where-to-next">Where to next</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<p>a11y-catscan crawls a website with Playwright/Chromium and runs one or
+more accessibility engines against each rendered HTML page. This page
+gets you from a fresh checkout to a first report.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<p>You need:</p>
+<ul>
+<li>Python 3.12 or newer.</li>
+<li>Node.js 18 or newer.</li>
+<li>A browser environment supported by Playwright.</li>
+<li>Enough memory for Chromium. Each parallel worker can cost hundreds of
+megabytes on JavaScript-heavy pages.</li>
+</ul>
+<p>The project keeps Python and Node dependencies separate:</p>
+<pre><code class="language-sh">python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[dev]'
+npm install
+python -m playwright install chromium
+</code></pre>
+<p>If you are using the checked-in development environment, the local
+pytest command is:</p>
+<pre><code class="language-sh">.venv/bin/pytest -q
+</code></pre>
+<h2 id="first-scan">First scan</h2>
+<p>Run a small crawl with the default engine, axe-core:</p>
+<pre><code class="language-sh">./a11y-catscan.py --max-pages 25 https://example.com/
+</code></pre>
+<p>The default output basename is timestamped:</p>
+<pre><code class="language-text">a11y-catscan-YYYY-MM-DD-HHMMSS.json
+a11y-catscan-YYYY-MM-DD-HHMMSS.jsonl
+a11y-catscan-YYYY-MM-DD-HHMMSS.html
+</code></pre>
+<p>Open the HTML report first. It is the easiest place to see total
+violations, criteria, affected pages, selectors, and representative
+HTML snippets.</p>
+<h2 id="run-all-engines">Run all engines</h2>
+<p>The scanner can run four engines:</p>
+<pre><code class="language-sh">./a11y-catscan.py --engine all --max-pages 50 https://example.com/
+</code></pre>
+<p>Or choose a subset:</p>
+<pre><code class="language-sh">./a11y-catscan.py --engine axe,alfa https://example.com/
+./a11y-catscan.py --engine axe,ibm,htmlcs https://example.com/
+</code></pre>
+<p>All engines report into the same result model. Findings include engine
+attribution so you can tell whether a result came from one tool or was
+confirmed by several.</p>
+<h2 id="quick-page-verification">Quick page verification</h2>
+<p>Use page mode after a code fix:</p>
+<pre><code class="language-sh">./a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
+</code></pre>
+<p><code>--page</code> does not crawl links. <code>-q</code> keeps output quiet. <code>--summary-json</code>
+prints a machine-readable one-line summary suitable for scripts.</p>
+<h2 id="generate-an-llm-summary">Generate an LLM summary</h2>
+<p>The full JSON report can be far too large for an LLM prompt. Use
+<code>--llm</code> to generate a compact Markdown summary:</p>
+<pre><code class="language-sh">./a11y-catscan.py --engine all --max-pages 100 --llm https://example.com/
+</code></pre>
+<p>The <code>.md</code> file groups recurring failures by rule and page pattern. It
+is designed for remediation planning, not as the legal audit artifact.
+Keep the full HTML and JSONL reports for traceability.</p>
+<h2 id="respect-robots-txt">Respect robots.txt</h2>
+<p>robots.txt is respected by default. Use <code>--ignore-robots</code> only when you
+have permission to scan paths that the site asks crawlers to avoid:</p>
+<pre><code class="language-sh">./a11y-catscan.py --ignore-robots https://example.com/
+</code></pre>
+<p>For production or shared infrastructure, prefer a scoped include path
+instead of simply ignoring robots:</p>
+<pre><code class="language-sh">./a11y-catscan.py --include-path /docs --include-path /help https://example.com/
+</code></pre>
+<h2 id="where-to-next">Where to next</h2>
+<ul>
+<li>Configure a real site: <a href="../configuration/index.html">configuration</a>.</li>
+<li>Learn scan modes: <a href="../scan-workflows/index.html">scan workflows</a>.</li>
+<li>Scan logged-in pages: <a href="../authentication/index.html">authentication</a>.</li>
+<li>Interpret output: <a href="../reports/index.html">reports</a>.</li>
+</ul>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

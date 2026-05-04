@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Authentication | a11y-catscan</title>
+  <meta name="description" content="Login plugins, saved storage state, session recovery, and logout-trap handling.">
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../index.html">
+        <img class="brand__icon" src="../assets/logo-a11y-catscan.svg" alt="" aria-hidden="true">
+        <span class="brand__name">a11y-catscan</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/a11y-catscan">GitHub</a>
+        <a href="../getting-started/index.html">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Docs</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<a class="docs-nav__item" href="../getting-started/index.html">
+  <span class="docs-nav__title">Getting started</span>
+  <span class="docs-nav__summary">Install dependencies, run a first scan, and read the generated reports.</span>
+</a>
+<a class="docs-nav__item" href="../configuration/index.html">
+  <span class="docs-nav__title">Configuration</span>
+  <span class="docs-nav__summary">YAML settings, CLI overrides, engines, WCAG levels, URL filters, and output naming.</span>
+</a>
+<a class="docs-nav__item" href="../scan-workflows/index.html">
+  <span class="docs-nav__title">Scan workflows</span>
+  <span class="docs-nav__summary">Full crawls, single-page checks, URL lists, rescans, diffs, grouping, and resume.</span>
+</a>
+<a class="docs-nav__item is-active" href="index.html">
+  <span class="docs-nav__title">Authentication</span>
+  <span class="docs-nav__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</span>
+</a>
+<a class="docs-nav__item" href="../reports/index.html">
+  <span class="docs-nav__title">Reports</span>
+  <span class="docs-nav__summary">JSONL, JSON, HTML, Markdown summaries, allowlists, and interpreting findings.</span>
+</a>
+<a class="docs-nav__item" href="../mcp/index.html">
+  <span class="docs-nav__title">MCP tools</span>
+  <span class="docs-nav__summary">Claude Code / MCP integration, tool list, safety model, and local setup.</span>
+</a>
+<a class="docs-nav__item" href="../troubleshooting/index.html">
+  <span class="docs-nav__title">Troubleshooting</span>
+  <span class="docs-nav__summary">Missing engines, browser launch failures, auth loops, robots.txt skips, and noisy reports.</span>
+</a>
+<a class="docs-nav__item" href="../faq/index.html">
+  <span class="docs-nav__title">FAQ</span>
+  <span class="docs-nav__summary">Short answers for teams adopting a11y-catscan.</span>
+</a>
+<a class="docs-nav__item" href="../design/index.html">
+  <span class="docs-nav__title">Design</span>
+  <span class="docs-nav__summary">Architecture, source layout, lifecycles, safety boundaries, and testing model.</span>
+</a>
+<a class="docs-nav__item" href="../changelog/index.html">
+  <span class="docs-nav__title">Changelog</span>
+  <span class="docs-nav__summary">Shipped milestones and hardening notes.</span>
+</a>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow">Documentation</p>
+          <h1>Authentication</h1>
+          <p class="docs-article__summary">Login plugins, saved storage state, session recovery, and logout-trap handling.</p>
+          <p class="docs-article__source">Authentication</p>
+        </header>
+<section class="toc">
+  <h2 class="toc__heading">On this page</h2>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#plugin-contract">Plugin contract</a></li>
+<li class="toc__item toc__item--level-2"><a href="#yaml-configuration">YAML configuration</a></li>
+<li class="toc__item toc__item--level-2"><a href="#saved-session-state">Saved session state</a></li>
+<li class="toc__item toc__item--level-2"><a href="#avoiding-logout-traps">Avoiding logout traps</a></li>
+<li class="toc__item toc__item--level-2"><a href="#session-recovery">Session recovery</a></li>
+<li class="toc__item toc__item--level-2"><a href="#cookie-based-http-probes">Cookie-based HTTP probes</a></li>
+  </ul>
+</section>
+        <div class="prose">
+<p>Authenticated scans use a site-specific login plugin. The plugin gets a
+Playwright browser context and drives the login flow just as a user
+would.</p>
+<h2 id="plugin-contract">Plugin contract</h2>
+<p>Required:</p>
+<pre><code class="language-python">async def login(context, config) -&gt; bool:
+    ...
+</code></pre>
+<p>Optional:</p>
+<pre><code class="language-python">async def is_logged_in(page) -&gt; bool:
+    ...
+
+async def init_from_context(context) -&gt; None:
+    ...
+
+exclude_paths = [&quot;/logout&quot;]
+</code></pre>
+<p><code>login()</code> returns <code>True</code> only when the browser context is authenticated.
+<code>is_logged_in()</code> runs after page loads and lets the crawl detect a
+mid-scan logout.</p>
+<h2 id="yaml-configuration">YAML configuration</h2>
+<pre><code class="language-yaml">auth:
+  login_script: login-hubzero.py
+  credentials_file: ~/.a11y-catscan-creds
+  login_url: /login
+</code></pre>
+<p>The sample <code>login-hubzero.py</code> reads credentials from a file and logs in
+through the rendered form. Treat it as an example, not a universal
+plugin.</p>
+<h2 id="saved-session-state">Saved session state</h2>
+<p>After a successful login, Playwright storage state is saved to:</p>
+<pre><code class="language-text">.auth-state.json
+</code></pre>
+<p>This file is gitignored. Subsequent scans try saved state before running
+the login script. If the saved state no longer looks authenticated, the
+scanner falls back to <code>login()</code>.</p>
+<h2 id="avoiding-logout-traps">Avoiding logout traps</h2>
+<p>A plugin can export:</p>
+<pre><code class="language-python">exclude_paths = [&quot;/logout&quot;]
+</code></pre>
+<p>These paths are merged into the crawl exclusion list after the scanner
+starts. This prevents obvious logout links from entering the frontier.</p>
+<p>The recovery cycle handles less obvious cases, such as links that look
+safe but invalidate the session when visited.</p>
+<h2 id="session-recovery">Session recovery</h2>
+<p>When <code>is_logged_in(page)</code> returns <code>False</code>:</p>
+<ol>
+<li>The current URL is marked suspect.</li>
+<li>In-flight workers drain.</li>
+<li>The scanner re-runs login.</li>
+<li>Suspect URLs are tested serially.</li>
+<li>URLs that immediately break the session are banned.</li>
+<li>Safe suspects are requeued for a normal scan.</li>
+</ol>
+<p>If re-login fails, recovery is disabled for the rest of the run. That
+keeps the crawl bounded when the auth plugin or credentials are broken.</p>
+<h2 id="cookie-based-http-probes">Cookie-based HTTP probes</h2>
+<p>The cheap <code>http_status()</code> probe can send cookies loaded from
+<code>auth.cookies_file</code> when configured. This helps the pre-browser HEAD/GET
+check see authenticated pages as HTML instead of redirects to login.</p>
+<pre><code class="language-yaml">auth:
+  cookies_file: ~/.a11y-catscan-cookies.json
+</code></pre>
+<p>Cookie files and storage state should never be committed. Rotate any
+sessions that were accidentally tracked or shared.</p>
+
+        </div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

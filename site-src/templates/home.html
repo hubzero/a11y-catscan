@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ site_name }} | Multi-engine WCAG scanner</title>
+  <meta name="description" content="{{ site_description }}">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body class="site-home">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header">
+      <a class="brand" href="index.html">
+        <img class="brand__icon" src="{{ logo_href }}" alt="" aria-hidden="true">
+        <span class="brand__name">{{ site_name }}</span>
+      </a>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="{{ github_href }}">GitHub</a>
+        <a href="{{ docs_href }}">Docs</a>
+      </nav>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+      <section class="hero">
+        <div class="hero__copy">
+          <p class="eyebrow">WCAG audit scanner</p>
+          <h1>Multi-engine accessibility scans that survive real crawls.</h1>
+          <p class="hero__lede">{{ site_description }}</p>
+          <div class="hero__actions">
+            <a class="button button--primary" href="{{ primary_href }}">Get started</a>
+            <a class="button" href="{{ secondary_href }}">Configure a scan</a>
+          </div>
+        </div>
+        <div class="hero__visual" role="img" aria-label="a11y-catscan scan flow">
+          <div class="scan-card scan-card--browser">
+            <span>Playwright</span>
+            <strong>Rendered HTML</strong>
+          </div>
+          <div class="engine-stack">
+            <span>axe</span>
+            <span>Alfa</span>
+            <span>IBM</span>
+            <span>HTMLCS</span>
+          </div>
+          <div class="scan-card scan-card--reports">
+            <span>Streaming output</span>
+            <strong>JSONL + HTML + Markdown</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="feature-strip" aria-label="Core capabilities">
+        <article>
+          <h2>Four engines, one result model</h2>
+          <p>Normalize axe-core, Siteimprove Alfa, IBM Equal Access, and HTML_CodeSniffer into EARL outcomes and Success Criterion tags.</p>
+        </article>
+        <article>
+          <h2>Built for long scans</h2>
+          <p>Stream JSONL per page, flush final reports incrementally, save crawl state, and resume after interruption.</p>
+        </article>
+        <article>
+          <h2>Useful after the scan</h2>
+          <p>Search reports, check individual pages, group findings, generate LLM summaries, and diff against a baseline.</p>
+        </article>
+      </section>
+
+      <section class="docs-panel">
+        <div class="section-heading">
+          <p class="eyebrow">Documentation</p>
+          <h2>Run it, tune it, and explain the results.</h2>
+        </div>
+        <div class="doc-grid">
+{{ docs_cards }}
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
