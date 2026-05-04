@@ -1,224 +1,171 @@
-# a11y-catscan
+<p align="center">
+  <img src="docs/assets/logo-a11y-catscan.svg" alt="a11y-catscan" width="600">
+</p>
 
-Multi-engine WCAG accessibility scanner. Crawls a website using
-Playwright/Chromium and runs up to four accessibility engines on each
-page, all sharing a single browser instance.
+<p align="center">
+  <strong>Multi-engine accessibility scans that survive real crawls.</strong>
+</p>
 
-## Engines
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://hubzero.github.io/a11y-catscan/"><img src="https://img.shields.io/badge/docs-Pages-blue" alt="docs"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12+-3776AB?logo=python&logoColor=white" alt="Python 3.12+"></a>
+  <a href="https://playwright.dev/"><img src="https://img.shields.io/badge/Playwright-1.59-2EAD33?logo=playwright&logoColor=white" alt="Playwright 1.59"></a>
+  <a href="https://www.w3.org/TR/WCAG22/"><img src="https://img.shields.io/badge/WCAG-2.2-005A9C" alt="WCAG 2.2"></a>
+  <a href="docs-src/mcp.md"><img src="https://img.shields.io/badge/MCP-server-444" alt="MCP server"></a>
+  <a href="#whats-shipped"><img src="https://img.shields.io/badge/status-beta-orange" alt="status: beta"></a>
+</p>
 
-| Engine | Flag | What it catches | License |
-|--------|------|----------------|---------|
-| [axe-core](https://github.com/dequelabs/axe-core) (Deque) | `--engine axe` | Color contrast, ARIA, labels, structure — the industry standard | MPL-2.0 |
-| [Siteimprove Alfa](https://github.com/Siteimprove/alfa) | `--engine alfa` | Target size, landmarks, enhanced contrast — matches Siteimprove scanner | MIT |
-| [IBM Equal Access](https://github.com/IBMa/equal-access) | `--engine ibm` | IBM Accessibility requirements, content landmarks, form validation | Apache-2.0 |
-| [HTML_CodeSniffer](https://github.com/nickersk/HTML_CodeSniffer) (Squiz) | `--engine htmlcs` | WCAG parsing rules, heading structure, form submit buttons | BSD-3 |
+a11y-catscan crawls a website with Playwright and runs four
+accessibility engines — axe-core, Siteimprove Alfa, IBM Equal
+Access, and HTML_CodeSniffer — sharing one Chromium instance.
+Findings are deduped across engines, streamed to JSONL/HTML/JSON
+reports, and exposed as MCP tools so an LLM can analyze them
+directly.
 
-Run one engine or combine them:
+**Status: beta.** Production-shaped, exercising in dev; recovery
+cycle and worker pool work end-to-end on multi-thousand-page
+authenticated crawls. Architecture and per-module design notes
+live in [DESIGN.md](DESIGN.md). Site handbook is rendered to
+GitHub Pages from `docs-src/`; see the [documentation index](#documentation)
+below.
 
-```bash
-a11y-catscan.py                          # axe-core only (default)
-a11y-catscan.py --engine alfa            # Siteimprove Alfa only
-a11y-catscan.py --engine axe,alfa        # axe + Alfa
-a11y-catscan.py --engine axe,ibm,htmlcs  # three engines
-a11y-catscan.py --engine all             # all four engines
-```
+## What's shipped
 
-All engines share one Chromium process. Each finding is tagged with its
-engine for attribution in reports.
-
-### How the engines work
-
-- **axe-core**, **IBM**, **HTML_CodeSniffer**: JavaScript injected into the
-  page, runs in-browser, returns results instantly. Same architecture as
-  the browser extensions.
-- **Siteimprove Alfa**: Node.js subprocess connects to the shared Chromium
-  via CDP (Chrome DevTools Protocol), runs its TypeScript rule engine on
-  the already-loaded page. No second page load.
+- **Four scan engines.** axe-core (Deque), Siteimprove Alfa
+  (ACT-rules native), IBM Equal Access, HTML_CodeSniffer. Run
+  one or combine them — `--engine axe,alfa,ibm,htmlcs` — all
+  sharing one Chromium so a multi-engine scan isn't 4× the
+  page loads. Each finding carries an `engine` attribution.
+- **Cross-engine dedup.** Findings sharing
+  `(selector, primary-tag, outcome)` collapse into one entry
+  with `engines: {axe: ..., ibm: ...}` and per-engine impact
+  upgraded to the worst severity. EARL outcomes
+  (`failed` / `cantTell` / `passed` / `inapplicable`) are the
+  internal vocabulary.
+- **Streaming reports.** JSONL is written one page per line so
+  memory stays flat across 5000-page crawls; HTML and the
+  LLM-friendly markdown summary stream from disk on demand.
+- **Sliding-window async crawler.** N-worker pool with one
+  Chromium, periodic browser restart for memory hygiene
+  (`restart_every`), atomic state save (`--resume`), graceful
+  shutdown on SIGTERM/SIGINT, on-demand snapshot via SIGUSR1.
+- **Authenticated scans with mid-scan session recovery.** A
+  Python login plugin authenticates once, the saved session
+  state shortcuts subsequent starts, and if the session expires
+  mid-crawl the scanner drains workers, re-logs-in, bans
+  detected logout-trap URLs, and resumes. Persistent re-login
+  failure trips a circuit breaker so the crawl exits instead
+  of looping.
+- **Allowlist with engine + outcome filters.** YAML allowlist
+  suppresses known-acceptable findings by rule, URL, target,
+  engine, and outcome — all AND'd. O(1) average lookup via a
+  rule-id index.
+- **MCP server.** `--mcp` exposes
+  `scan_page` / `analyze_report` / `find_issues` / `check_page`
+  / `compare_scans` / `manage_scans` / `lookup_wcag` /
+  `list_engines` as Claude Code tools. URL-scheme validated to
+  http(s).
+- **Diff and rescan workflows.** `--diff PREV.jsonl` shows
+  fixed/new/remaining findings; `--rescan PREV.jsonl` re-scans
+  only pages that previously had issues; `--violations-from`
+  / `--incompletes-from` extract specific URL sets from prior
+  reports.
+- **Group-by analysis.** `--group-by {rule, selector, color,
+  reason, wcag, level, engine, bp}` prints a sorted summary
+  with per-group page counts and one example.
+- **Niceness + OOM-resistance.** Defaults to `nice 10` and
+  `oom_score_adj=1000` so the scanner doesn't starve
+  production services on shared hosts.
 
 ## Quick start
 
-```bash
-# Scan with defaults
-a11y-catscan.py https://example.com/
+Requires Python 3.12 and Node.js 18+.
 
-# Scan 500 pages with multiple engines and LLM-friendly output
-a11y-catscan.py --engine axe,alfa --max-pages 500 --llm https://example.com/
-
-# Quick single-page check
-a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
-
-# Parallel scanning with authentication
-a11y-catscan.py --engine axe,alfa --workers 7 --max-pages 1000 https://example.com/
-```
-
-## Setup
-
-Requires Python 3.8+ and Node.js 18+.
-
-```bash
-pip install playwright pyyaml
+```sh
+pip install -e .              # installs playwright, pyyaml, mcp
 playwright install chromium
-npm install                    # installs all engines from package.json
+npm install                   # bundles the four engines
 ```
 
-Copy `a11y-catscan.yaml.example` to `a11y-catscan.yaml` and edit for
-your site. The config file is gitignored so each deployment keeps its
-own settings without merge conflicts.
+Scan one URL:
 
-## Configuration
+```sh
+./a11y-catscan.py --page https://example.com/
+```
 
-All settings in `a11y-catscan.yaml` can be overridden on the command line.
+Crawl with all four engines, write LLM-friendly report:
 
-| Setting | CLI flag | Default | Description |
+```sh
+./a11y-catscan.py --engine all --max-pages 500 --llm \
+    https://example.com/
+```
+
+Compare against last week's baseline:
+
+```sh
+./a11y-catscan.py --diff baseline.jsonl --max-pages 500 \
+    https://example.com/
+```
+
+Full setup walkthrough in [`docs-src/getting-started.md`](docs-src/getting-started.md).
+
+## Documentation
+
+Site handbook (rendered to
+[hubzero.github.io/a11y-catscan](https://hubzero.github.io/a11y-catscan/)
+from these sources):
+
+| Topic | Source |
+|---|---|
+| Getting started — install, first scan, exit codes | [`docs-src/getting-started.md`](docs-src/getting-started.md) |
+| Configuration — every YAML setting + CLI override | [`docs-src/configuration.md`](docs-src/configuration.md) |
+| Scan workflows — crawl, page, urls, rescan, diff, resume | [`docs-src/scan-workflows.md`](docs-src/scan-workflows.md) |
+| Reports — JSON, JSONL, HTML, LLM markdown formats | [`docs-src/reports.md`](docs-src/reports.md) |
+| Authentication — login plugin, session recovery, logout traps | [`docs-src/authentication.md`](docs-src/authentication.md) |
+| MCP server — tool surface for Claude Code | [`docs-src/mcp.md`](docs-src/mcp.md) |
+| Troubleshooting | [`docs-src/troubleshooting.md`](docs-src/troubleshooting.md) |
+| FAQ | [`docs-src/faq.md`](docs-src/faq.md) |
+
+Internal references:
+
+- [DESIGN.md](DESIGN.md) — current-state design specification
+- [CHANGELOG.md](CHANGELOG.md) — date-organized log of changes
+
+## Engines
+
+| Engine | Flag | Type | License |
 |---|---|---|---|
-| `url` | positional arg | — | Starting URL to crawl |
-| `level` | `--level` | `wcag21aa` | WCAG conformance level |
-| `engine` | `--engine` | `axe` | One or more engines: `axe`, `alfa`, `ibm`, `htmlcs`, `all` |
-| `max_pages` | `--max-pages` | 50 | Maximum pages to scan |
-| `page_wait` | — | 1 | Seconds to wait after page load (with `--wait-until load`) |
-| `wait_until` | `--wait-until` | `networkidle` | Page load strategy: `networkidle`, `load`, `domcontentloaded` |
-| `save_every` | `--save-every` | 25 | Flush reports every N pages |
-| `output_dir` | `--output-dir` | cwd | Report output directory |
-| `exclude_paths` | `--exclude-path` | — | URL path prefixes to skip |
-| `exclude_regex` | — | — | Regex patterns to skip |
-| `exclude_query` | — | — | Query substrings to skip |
-| `include_paths` | `--include-path` | — | Only scan URLs under these prefixes |
-| `strip_query_params` | — | — | Query parameters to strip for URL deduplication |
-| `niceness` | — | 10 | OS nice level (0–19) |
-| `oom_score_adj` | — | 1000 | Linux OOM killer score (1000 = killed first) |
-| `allowlist` | `--allowlist` | — | YAML file of known-acceptable incompletes |
-| `ignore_robots` | `--ignore-robots` | false | Ignore robots.txt |
-| `ignore_certificate_errors` | — | false | Accept self-signed TLS certs |
-| `workers` | `--workers` | 1 | Parallel async browser pages |
-| `restart_every` | — | 500 | Restart browser every N pages (prevents memory leaks) |
-| `chromium_path` | — | — | Path to Chromium (uses Playwright's bundled Chromium by default) |
+| [axe-core](https://github.com/dequelabs/axe-core) (Deque) | `--engine axe` | Browser injection (default) | MPL-2.0 |
+| [Siteimprove Alfa](https://github.com/Siteimprove/alfa) | `--engine alfa` | Node.js subprocess via CDP | MIT |
+| [IBM Equal Access](https://github.com/IBMa/equal-access) | `--engine ibm` | Browser injection | Apache-2.0 |
+| [HTML_CodeSniffer](https://github.com/squizlabs/HTML_CodeSniffer) | `--engine htmlcs` | Browser injection | BSD-3 |
 
-### WCAG level handling
+`--engine all` runs all four; engines that aren't listed are
+skipped. axe-core, IBM, and HTML_CodeSniffer inject JavaScript
+into the live page and run in-browser. Alfa's TypeScript engine
+runs as a Node.js subprocess and connects to the shared Chromium
+via CDP — no second page load.
 
-Each engine maps `--level` to its native ruleset:
+## Local development
 
-| Level | axe-core | Alfa | IBM | HTML_CodeSniffer |
-|-------|----------|------|-----|------------------|
-| A | `wcag2a, wcag21a` | Filters by SC level | `WCAG_2_1` (A rules) | `WCAG2A` |
-| AA | `wcag2a, wcag2aa, wcag21a, wcag21aa` | Filters by SC level | `WCAG_2_1` | `WCAG2AA` |
-| AAA | All tags | All rules | `WCAG_2_1` (all) | `WCAG2AAA` |
+The full test suite runs against the bundled fixtures:
 
-## Authentication
-
-To scan authenticated pages, configure a login script:
-
-```yaml
-auth:
-  login_script: login-hubzero.py
+```sh
+pip install -e '.[dev]'
+pytest                       # 368 tests, ~70s with browser
+pytest -m "not browser"      # 285 fast tests, <10s
 ```
 
-The login script receives a Playwright browser context and authenticates
-via the browser UI. Features:
-
-- **Session persistence**: Cookies saved to `.auth-state.json` after login.
-  Subsequent scans restore the session instantly (4s vs 13s startup).
-- **Expiry detection**: If the saved session is expired, falls back to
-  running the login script automatically.
-- **Mid-scan recovery**: If the session expires during a scan, all workers
-  drain, the scanner re-authenticates, retests suspect URLs, and resumes.
-- **Browser restart**: After every `restart_every` pages, the browser
-  restarts to prevent memory leaks. Auth state is restored automatically.
-
-## Analysis flags
-
-After a scan, use these flags to analyze results from previous reports:
-
-| Flag | Description |
-|---|---|
-| `--violations-from REPORT` | Extract and re-scan only pages with violations from a JSON/JSONL report |
-| `--incompletes-from REPORT` | Extract and re-scan only pages with incompletes |
-| `--group-by TYPE` | Print grouped summary: `rule`, `selector`, `color`, `reason`, `wcag` |
-| `--diff PREV.jsonl` | Compare against a previous scan — show fixed/new/remaining |
-| `--rescan PREV.jsonl` | Re-scan only pages that had issues |
-
-```bash
-# Group violations by color contrast pair
-a11y-catscan.py --engine all --urls pages.txt --group-by color
-
-# Rescan only pages that had violations
-a11y-catscan.py --violations-from report.json --engine axe
-
-# Show what changed since last scan
-a11y-catscan.py --max-pages 500 --diff baseline.jsonl --llm https://example.com/
-```
-
-## Output files
-
-Each scan produces:
-
-| File | Description |
-|---|---|
-| `*.json` | Full results for every page (violations, incomplete, passes) |
-| `*.html` | Human-readable report with summary cards, WCAG criteria table, per-page details |
-| `*.jsonl` | Streaming results (one JSON object per line) — used for `--diff` and `--rescan` |
-| `*.state.json` | Crawl state (queue + visited URLs) — used for `--resume` to continue later |
-| `*.md` | LLM-optimized markdown summary (only with `--llm`) |
-
-Each violation/incomplete in the report includes an `engine` field (`axe`,
-`alfa`, `ibm`, `htmlcs`) so you can see which scanner found it.
-
-## Scanning modes
-
-| Flag | Description |
-|---|---|
-| `--crawl` | Crawl and discover pages from the starting URL (default) |
-| `--page URL` | Scan only the given URL, no crawling — fast single-page verify |
-| `--urls FILE` | Scan a specific list of URLs from a file (one per line) |
-| `--rescan PREV.jsonl` | Re-scan only pages that had issues in a previous scan |
-| `--resume STATE.json` | Resume a previous crawl from its saved state file |
-
-## Performance
-
-| Flag | Description |
-|---|---|
-| `--workers N` | Parallel async browser pages (default: 1). All workers share one Chromium process. |
-| `--wait-until` | `networkidle` (default) adapts to each page. `load` uses fixed delay. |
-
-Typical throughput:
-- `--engine axe`: ~0.8s/page with 7 workers
-- `--engine all`: ~5s/page with 7 workers (Alfa subprocess serializes)
-- 39,000+ pages scanned in a single session with `--resume`
-
-## Workflow: scan → fix → verify
-
-```bash
-# 1. Full baseline scan with all engines
-a11y-catscan.py --engine all --max-pages 500 --llm https://example.com/
-
-# 2. Group results to prioritize fixes
-a11y-catscan.py --engine all --urls pages.txt --group-by reason
-
-# 3. Fix issues, verify the specific page
-a11y-catscan.py --page -q --summary-json https://example.com/fixed-page
-
-# 4. Re-scan only pages that failed, compare against baseline
-a11y-catscan.py --violations-from baseline.json --diff baseline.jsonl --llm
-
-# 5. Large site? Scan in chunks and resume
-a11y-catscan.py --max-pages 10000 --resume reports/scan.state.json
-
-# 6. Suppress known limitations
-echo '- rule: color-contrast
-  url: /homepage
-  reason: CKEditor toolbar gradient' >> allowlist.yaml
-```
-
-## Exit codes
-
-| Code | Meaning |
-|---|---|
-| 0 | No violations found |
-| 1 | Violations found |
-| 2 | Setup error (missing dependencies) |
+Coverage is configured in `pyproject.toml`; see
+[`tests/`](tests/) for the layout (`test_engine_normalizers.py`,
+`test_crawl_loop.py`, `test_mcp_tools.py`, etc.).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
 
 Engine licenses: axe-core (MPL-2.0), Siteimprove Alfa (MIT),
-IBM Equal Access (Apache-2.0), HTML_CodeSniffer (BSD-3).
+IBM Equal Access (Apache-2.0), HTML_CodeSniffer (BSD-3). The
+four engines are vendored via npm and ship under their own
+licenses; this repo wraps them.
