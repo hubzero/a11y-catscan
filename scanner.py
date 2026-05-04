@@ -242,6 +242,7 @@ class Scanner:
                 include_best=self._include_best)
             for name in self._engine_names
         ]
+        self._engine_errors = []
 
     @property
     def is_started(self) -> bool:
@@ -325,16 +326,26 @@ class Scanner:
 
         # Start non-Alfa engines (Alfa already started if present —
         # it launched the browser server above)
+        self._engine_errors = []
         for eng in list(self._engines):
             if isinstance(eng, AlfaEngine):
                 continue  # already started
             try:
                 await eng.start(self._browser)
             except Exception as e:
+                self._engine_errors.append(
+                    '{}: {}'.format(type(eng).__name__, e))
                 if not self.quiet:
                     print("  Engine start failed ({}): {}".format(
                         type(eng).__name__, e))
                 self._engines.remove(eng)
+
+        if not self._engines:
+            self._started = True
+            await self.stop()
+            raise RuntimeError(
+                'No accessibility engines started: {}'.format(
+                    '; '.join(self._engine_errors) or 'none configured'))
 
         self._started = True
 
@@ -505,8 +516,11 @@ class Scanner:
             if not success and not self.quiet:
                 print("  [re-login failed after restart]")
 
-        # Restart engines
+        # Restart engines.  Alfa was already started above because it owns
+        # the browser server Python reconnects to.
         for eng in self._engines:
+            if isinstance(eng, AlfaEngine):
+                continue
             try:
                 await eng.start(self._browser)
             except Exception as e:

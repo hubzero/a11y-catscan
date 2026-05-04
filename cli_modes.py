@@ -27,15 +27,23 @@ def cmd_cleanup():
     killed = 0
     try:
         result = subprocess.run(
-            ['ps', '-u', str(os.getuid()), '-o', 'pid,comm'],
+            ['ps', '-u', str(os.getuid()), '-o', 'pid=,comm=,args='],
             capture_output=True, text=True, timeout=5)
         for line in result.stdout.splitlines():
-            parts = line.split()
+            parts = line.split(None, 2)
             if len(parts) >= 2:
                 try:
                     pid = int(parts[0])
                     comm = parts[1]
-                    if pid != os.getpid() and 'chrome' in comm:
+                    args = parts[2] if len(parts) > 2 else ''
+                    launched_by_playwright = (
+                        'chromiumdev_profile' in args
+                        or 'ms-playwright' in args
+                        or '--remote-debugging-pipe' in args
+                    )
+                    if (pid != os.getpid()
+                            and 'chrome' in comm
+                            and launched_by_playwright):
                         os.kill(pid, signal.SIGKILL)
                         killed += 1
                 except (ValueError, ProcessLookupError,

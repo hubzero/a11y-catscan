@@ -34,6 +34,8 @@ import os
 import re
 import sys
 import logging
+import ipaddress
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -81,7 +83,54 @@ def _validate_scan_url(url):
                 "(got: '{}')").format(parsed.scheme or '(empty)')
     if not parsed.netloc:
         return 'url must include a host'
+    host = parsed.hostname
+    if not host:
+        return 'url must include a host'
+    if _host_is_forbidden_scan_target(host):
+        return 'url host resolves to a private or local address'
     return None
+
+
+def _host_is_forbidden_scan_target(host):
+    """True when host points at local/private network space.
+
+    MCP tools can be invoked by an LLM-facing client, so URL scans
+    must not become a generic SSRF primitive.  IP literals are checked
+    directly; hostnames are resolved when possible.  Unresolvable test
+    names such as example.test are left to the browser to fail normally.
+
+    Set A11Y_CATSCAN_MCP_ALLOW_PRIVATE=1 only for trusted local tests.
+    """
+    if os.environ.get('A11Y_CATSCAN_MCP_ALLOW_PRIVATE') in (
+            '1', 'true', 'yes'):
+        return False
+
+    host = host.strip().rstrip('.').lower()
+    if host in ('localhost',) or host.endswith('.localhost'):
+        return True
+
+    def _forbidden_ip(value):
+        try:
+            ip = ipaddress.ip_address(value)
+        except ValueError:
+            return False
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        )
+
+    if _forbidden_ip(host):
+        return True
+
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    return any(_forbidden_ip(info[4][0]) for info in infos)
 
 
 @mcp.tool()
@@ -114,17 +163,33 @@ async def scan_page(
 
     log.info('scan_page: %s (engines=%s, level=%s)', url, engines, level)
 
-    async with Scanner(engines=engine_list, level=level) as scanner:
-        result = await scanner.scan_page(url)
-
-    if result.get('skipped'):
+    try:
+        async with Scanner(engines=engine_list, level=level) as scanner:
+            result = await scanner.scan_page(url)
+    except Exception as e:
         return json.dumps({
             'url': url,
+            'error': str(e),
+            'clean': False,
+            'failed': None,
+            'cantTell': None,
+            'findings': [],
+        }, indent=2)
+
+    if result.get('skipped'):
+        is_error = result['skipped'].startswith(('error:', 'no engine'))
+        payload = {
+            'url': url,
             'skipped': result['skipped'],
-            'clean': True,
+            'clean': not is_error,
             'failed': 0,
             'cantTell': 0,
             'findings': [],
+        }
+        if is_error:
+            payload['error'] = result['skipped']
+        return json.dumps({
+            **payload,
         }, indent=2)
 
     failed = count_nodes(result.get(EARL_FAILED, []))
@@ -181,8 +246,10 @@ async def analyze_report(
         JSON with grouped findings sorted by count, including SC names
         and example selectors.
     """
-    if not os.path.exists(report_path):
-        return json.dumps({'error': 'Report not found: ' + report_path})
+    report_ref = report_path
+    report_path = _resolve_report(report_ref)
+    if not report_path:
+        return json.dumps({'error': 'Report not found: ' + str(report_ref)})
 
     groups = {}
     try:
@@ -517,8 +584,17 @@ def _resolve_report(name_or_path):
       - A registered scan name (looked up in registry)
       - A .json path (converted to .jsonl)
     """
+    if not name_or_path:
+        return None
+
+    def _allowed_report_path(path):
+        suffix = Path(path).suffix.lower()
+        return suffix in ('.json', '.jsonl')
+
     # Direct path
     if os.path.exists(name_or_path):
+        if not _allowed_report_path(name_or_path):
+            return None
         if name_or_path.endswith('.json') and not name_or_path.endswith('.jsonl'):
             jsonl = name_or_path + 'l'
             if os.path.exists(jsonl):

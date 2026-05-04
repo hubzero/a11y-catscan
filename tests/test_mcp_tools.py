@@ -554,6 +554,14 @@ class TestScanPageUrlValidation:
         assert mcp_server_module._validate_scan_url(
             'https://example.test/p') is None
 
+    def test_validator_rejects_loopback(self, mcp_server_module):
+        assert 'private' in mcp_server_module._validate_scan_url(
+            'http://127.0.0.1:8000/p')
+
+    def test_validator_rejects_localhost(self, mcp_server_module):
+        assert 'private' in mcp_server_module._validate_scan_url(
+            'http://localhost/p')
+
 
 # ── scan_page (MCP wrapper) ───────────────────────────────────
 
@@ -564,11 +572,12 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
 
 @pytest.fixture
-def mcp_fixture_site():
+def mcp_fixture_site(monkeypatch):
     """Local HTTP server serving tests/fixtures/ — used by the
     scan_page MCP tests.  scan_page validates http(s) only, so
     tests can't use file:// URIs anymore.
     """
+    monkeypatch.setenv('A11Y_CATSCAN_MCP_ALLOW_PRIVATE', '1')
     handler = partial(_QuietHandler, directory=str(_FIXTURES))
     server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
     port = server.server_address[1]
@@ -621,13 +630,14 @@ class TestScanPage:
             assert 'selector' in f
 
     async def test_skipped_page_returns_skipped_field(
-            self, mcp_server_module, tmp_path):
+            self, mcp_server_module, tmp_path, monkeypatch):
         # A tiny HTML payload (under the 100-byte threshold) is
         # rejected up front by Scanner — the wrapper preserves the
         # `skipped` reason in its JSON response.  Serve from
         # tmp_path so we don't pollute the shared fixtures dir
         # (which would race with parallel test runs).
         (tmp_path / 'tiny.html').write_text('<html></html>')
+        monkeypatch.setenv('A11Y_CATSCAN_MCP_ALLOW_PRIVATE', '1')
         handler = partial(_QuietHandler, directory=str(tmp_path))
         server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
         thread = threading.Thread(

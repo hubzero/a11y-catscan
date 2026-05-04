@@ -18,6 +18,12 @@ from allowlist import matches_allowlist
 from report_io import iter_deduped
 
 
+def _md_fenced_html(snippet):
+    """Return a fenced HTML block that cannot be broken by page text."""
+    text = str(snippet).replace('```', '`\\`\\`')
+    return f'```html\n{text}\n```'
+
+
 def generate_llm_report(jsonl_path, output_path, start_url,
                         level_label='WCAG 2.1 Level AA',
                         allowlist=None, config=None):
@@ -80,11 +86,15 @@ def generate_llm_report(jsonl_path, output_path, start_url,
                 suppressed_count += len(nodes)
                 continue
             pages_with_incompletes.add(path)
+            added_to_bucket = False
             for node in nodes:
+                node_keyed = False
                 for check in node.get('any', []):
                     d = check.get('data', {})
                     mk = (d.get('messageKey', '')
                           if isinstance(d, dict) else '')
+                    node_keyed = True
+                    added_to_bucket = True
                     if mk not in incompletes_by_key:
                         incompletes_by_key[mk] = {
                             'count': 0, 'pages': set(),
@@ -97,6 +107,27 @@ def generate_llm_report(jsonl_path, output_path, start_url,
                             and len(info['examples']) < 2
                             and snippet not in info['examples']):
                         info['examples'].append(snippet)
+                if not node_keyed:
+                    added_to_bucket = True
+                    mk = ''
+                    if mk not in incompletes_by_key:
+                        incompletes_by_key[mk] = {
+                            'count': 0, 'pages': set(),
+                            'examples': []}
+                    info = incompletes_by_key[mk]
+                    info['count'] += 1
+                    info['pages'].add(path)
+                    snippet = node.get('html', '')[:150]
+                    if (snippet
+                            and len(info['examples']) < 2
+                            and snippet not in info['examples']):
+                        info['examples'].append(snippet)
+            if not nodes and not added_to_bucket:
+                mk = ''
+                if mk not in incompletes_by_key:
+                    incompletes_by_key[mk] = {
+                        'count': 0, 'pages': set(), 'examples': []}
+                incompletes_by_key[mk]['pages'].add(path)
 
     # Build markdown
     lines = []
@@ -161,7 +192,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
                     len(info['pages']) - 10))
             lines.append('Examples:')
             for ex in info['examples']:
-                lines.append(f'```html\n{ex}\n```')
+                lines.append(_md_fenced_html(ex))
             lines.append('')
     else:
         lines.append('## Violations: NONE\n')
@@ -185,7 +216,7 @@ def generate_llm_report(jsonl_path, output_path, start_url,
                     len(pages_list) - 10))
             if info['examples']:
                 lines.append('Example:')
-                lines.append('```html\n{}\n```'.format(info['examples'][0]))
+                lines.append(_md_fenced_html(info['examples'][0]))
             lines.append('')
     else:
         lines.append('## Incompletes: NONE\n')

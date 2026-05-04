@@ -376,6 +376,10 @@ def main():
                     .format(e))
         config['engines'] = engines
     basename = args.output or 'a11y-catscan-{}'.format(datetime.now().strftime('%Y-%m-%d-%H%M%S'))
+    if (os.path.isabs(basename)
+            or basename != os.path.basename(basename)
+            or basename in ('', '.', '..')):
+        parser.error('--name/--output must be a filename, not a path')
     output_dir = args.output_dir or config.get('output_dir', os.getcwd())
     os.makedirs(output_dir, exist_ok=True)
 
