@@ -21,7 +21,8 @@ from urllib.parse import urlparse
 from engine_mappings import (
     sc_name, sc_level, resolve_sc,
     EARL_FAILED, EARL_CANTTELL)
-from scanner import dedup_page, count_nodes
+from report_io import iter_jsonl, iter_deduped
+from results import dedup_page, count_nodes
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_REGISTRY_PATH = os.path.join(SCRIPT_DIR, 'reports', 'scans.json')
@@ -86,29 +87,6 @@ def delete_scan(name, registry_path=None):
     if removed:
         _save_registry(reg, registry_path)
     return removed
-
-
-# ── JSONL Iteration ──────────────────────────────────────────────
-
-def iter_jsonl(jsonl_path):
-    """Iterate (url, data) pairs from a JSONL results file."""
-    with open(jsonl_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            for url, data in obj.items():
-                yield url, data
-
-
-def iter_deduped(jsonl_path):
-    """Iterate (url, deduped_data) from a JSONL file with dedup."""
-    for url, data in iter_jsonl(jsonl_path):
-        yield url, dedup_page(data)
 
 
 # ── Search Findings ──────────────────────────────────────────────

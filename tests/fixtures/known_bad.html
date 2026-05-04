@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <!-- intentionally no <title> for document-title violation -->
+</head>
+<body>
+  <h1>Known-bad fixture page</h1>
+
+  <!-- image-alt: img missing alt attribute -->
+  <img src="missing.png" width="80" height="80">
+
+  <!-- button-name: empty button has no accessible name -->
+  <button id="empty-btn"></button>
+
+  <!-- link-name: anchor with no text and no aria-label -->
+  <a href="/elsewhere"><span></span></a>
+
+  <!-- label: input with no associated label -->
+  <input type="text" id="nameless-input">
+
+  <!-- duplicate-id-active: two focusable elements share an id -->
+  <button id="dup">A</button>
+  <button id="dup">B</button>
+
+  <!-- aria-valid-attr: invalid aria-* attribute name -->
+  <div aria-bogus-attr="oops">aria probe</div>
+
+  <p>
+    Filler paragraph so the document body has enough content to clear
+    the scanner's 100-byte minimum and so axe has real DOM to analyze.
+    Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+    eiusmod tempor incididunt ut labore et dolore magna aliqua.
+  </p>
+</body>
+</html>

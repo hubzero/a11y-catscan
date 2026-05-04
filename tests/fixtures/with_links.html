@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Page with links</title>
+</head>
+<body>
+  <h1>Links fixture</h1>
+  <p>
+    A page that contains both an http and an https link plus an
+    intra-document anchor. The Scanner's link-extraction path filters
+    to http(s) only, so the fragment-only anchor should be excluded.
+  </p>
+  <ul>
+    <li><a href="https://example.test/a">External A</a></li>
+    <li><a href="http://example.test/b">External B</a></li>
+    <li><a href="#anchor">Internal anchor (filtered)</a></li>
+  </ul>
+</body>
+</html>

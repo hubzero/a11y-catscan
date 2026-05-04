@@ -270,6 +270,33 @@ SC_SLUGS = {
 SC_NUM_TO_SLUG = {v: k for k, v in SC_SLUGS.items()}
 
 
+_SC_DOTTED_RE = re.compile(r'^\d+\.\d+\.\d+$')
+_AXE_LEGACY_WCAG_RE = re.compile(r'^wcag(\d)(\d)(\d+)$')
+
+
+def parse_wcag_sc(tags):
+    """Extract WCAG success criteria numbers from a list of tags.
+
+    Handles normalized format 'sc-1.4.3' (preferred) and legacy
+    axe-core format 'wcag143'.  Level tags like 'wcag2a' are
+    ignored.  Returns a set of dotted SC numbers ('1.4.3', '2.4.7').
+    """
+    criteria = set()
+    for tag in tags:
+        # Normalized format: sc-X.Y.Z
+        if tag.startswith('sc-'):
+            sc = tag[3:]
+            if _SC_DOTTED_RE.match(sc):
+                criteria.add(sc)
+            continue
+        # Legacy axe format: wcagXYZ (digits only, no dots)
+        m = _AXE_LEGACY_WCAG_RE.match(tag)
+        if m:
+            criteria.add('{}.{}.{}'.format(
+                m.group(1), m.group(2), m.group(3)))
+    return criteria
+
+
 def sc_level(sc):
     """Return (level, version) for a WCAG SC, e.g. ('AA', '2.1')."""
     meta = SC_META.get(sc)

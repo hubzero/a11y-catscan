@@ -49,6 +49,7 @@ import os
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NODE_MODULES = os.path.join(SCRIPT_DIR, 'node_modules')
 
 
 class Engine:

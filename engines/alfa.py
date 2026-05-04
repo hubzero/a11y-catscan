@@ -313,7 +313,10 @@ class AlfaEngine(Engine):
 
         out = []
         try:
-            # Forward auth cookies so Alfa sees the same page
+            # Forward auth cookies so Alfa sees the same page.
+            # If extraction fails Alfa scans anonymously, which on
+            # an auth-required site silently produces login-page
+            # results — surface the cause in verbose mode.
             cookies = []
             try:
                 raw_cookies = await page.context.cookies()
@@ -324,8 +327,10 @@ class AlfaEngine(Engine):
                     'domain': c.get('domain', ''),
                     'path': c.get('path', '/'),
                 } for c in raw_cookies]
-            except Exception:
-                pass
+            except Exception as e:
+                if self.verbose and not self.quiet:
+                    print("  alfa: cookie extraction failed: "
+                          "{}".format(e))
 
             alfa_result = await self._run_alfa(page.url, cookies)
             if not alfa_result or not alfa_result.get('ok'):

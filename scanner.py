@@ -32,7 +32,8 @@ from datetime import datetime
 
 from engine_mappings import (
     EARL_FAILED, EARL_CANTTELL, EARL_PASSED, EARL_INAPPLICABLE)
-from engines import AxeEngine, IbmEngine, HtmlcsEngine, AlfaEngine
+from engines import (
+    AxeEngine, IbmEngine, HtmlcsEngine, AlfaEngine, make_engine)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -90,118 +91,10 @@ WCAG_LEVELS = {
 DEFAULT_LEVEL = 'wcag21aa'
 
 
-def count_nodes(result_list):
-    """Count total DOM nodes across a list of engine result dicts."""
-    total = 0
-    for rule_result in result_list:
-        total += len(rule_result.get('nodes', []))
-    return total
-
-
-def dedup_page(page_data):
-    """Deduplicate findings for one page across engines.
-
-    Merges findings that share the same (selector, tag, outcome)
-    into a single finding with multi-engine attribution.
-
-    Outcome merging: if one engine says 'failed' and another says
-    'cantTell' for the same element+tag, they stay separate — those
-    are different confidence levels.
-    """
-    deduped = {}
-
-    for outcome in (EARL_FAILED, EARL_CANTTELL):
-        for item in page_data.get(outcome, []):
-            tags = item.get('tags', [])
-            primary_tags = [t for t in tags
-                            if t.startswith(('sc-', 'aria-', 'bp-'))]
-            if not primary_tags:
-                primary_tags = [item.get('id', 'unknown')]
-
-            engine = item.get('engine', 'unknown')
-            rule_id = item.get('id', '')
-
-            for node in item.get('nodes', []):
-                selector = (node.get('target', [''])[0]
-                            if node.get('target') else '')
-                html = node.get('html', '')
-                msg = ''
-                for ct in ('any', 'all', 'none'):
-                    for c in node.get(ct, []):
-                        if c.get('message'):
-                            msg = c['message']
-                            break
-                    if msg:
-                        break
-
-                for ptag in primary_tags:
-                    key = (selector, ptag, outcome)
-
-                    if key not in deduped:
-                        deduped[key] = {
-                            'selector': selector,
-                            'html': html,
-                            'tags': list(tags),
-                            'outcome': outcome,
-                            'primary_tag': ptag,
-                            'description': item.get(
-                                'description', ''),
-                            'help': item.get('help', ''),
-                            'helpUrl': item.get('helpUrl', ''),
-                            'impact': item.get('impact', ''),
-                            'message': msg,
-                            'engines': {},
-                        }
-                    else:
-                        existing = deduped[key]
-                        for t in tags:
-                            if t not in existing['tags']:
-                                existing['tags'].append(t)
-                        _impacts = {
-                            'critical': 4, 'serious': 3,
-                            'moderate': 2, 'minor': 1}
-                        if (_impacts.get(item.get('impact', ''), 0)
-                                > _impacts.get(
-                                    existing['impact'], 0)):
-                            existing['impact'] = item.get(
-                                'impact', '')
-
-                    deduped[key]['engines'][engine] = {
-                        'rule': rule_id,
-                        'impact': item.get('impact', ''),
-                    }
-
-    result = {
-        'url': page_data.get('url', ''),
-        'timestamp': page_data.get('timestamp', ''),
-        'http_status': page_data.get('http_status'),
-        EARL_FAILED: [],
-        EARL_CANTTELL: [],
-        EARL_PASSED: page_data.get(EARL_PASSED, []),
-        EARL_INAPPLICABLE: page_data.get(EARL_INAPPLICABLE, []),
-    }
-
-    for (_, _, outcome), finding in deduped.items():
-        item = {
-            'id': finding['primary_tag'],
-            'engines': finding['engines'],
-            'engine_count': len(finding['engines']),
-            'outcome': finding['outcome'],
-            'description': finding['description'],
-            'help': finding['help'],
-            'helpUrl': finding['helpUrl'],
-            'impact': finding['impact'],
-            'tags': finding['tags'],
-            'nodes': [{
-                'target': [finding['selector']],
-                'html': finding['html'],
-                'any': ([{'message': finding['message']}]
-                        if finding['message'] else []),
-            }],
-        }
-        result[outcome].append(item)
-
-    return result
+# count_nodes / dedup_page moved to results.py — re-exported here so
+# existing callers (`from scanner import dedup_page, count_nodes`)
+# continue to work.  New code should import from results.py directly.
+from results import count_nodes, dedup_page  # noqa: F401
 
 
 # JavaScript element resolver — runs in the live DOM after engines
@@ -359,27 +252,17 @@ class Scanner:
         from playwright.async_api import async_playwright
         self._pw = await async_playwright().__aenter__()
 
-        # Instantiate engine objects
-        self._engines = []
-        for name in self._engine_names:
-            if name == 'axe':
-                self._engines.append(AxeEngine(
-                    self._scan_level, verbose=self.verbose,
-                    quiet=self.quiet, tags=self._tags,
-                    rules=self._rules))
-            elif name == 'ibm':
-                self._engines.append(IbmEngine(
-                    self._scan_level, verbose=self.verbose,
-                    quiet=self.quiet,
-                    include_best=self._include_best))
-            elif name == 'htmlcs':
-                self._engines.append(HtmlcsEngine(
-                    self._scan_level, verbose=self.verbose,
-                    quiet=self.quiet))
-            elif name == 'alfa':
-                self._engines.append(AlfaEngine(
-                    self._scan_level, verbose=self.verbose,
-                    quiet=self.quiet))
+        # Instantiate engine objects via the central factory.  Extras
+        # (tags/rules/include_best) get forwarded only to engines that
+        # accept them.
+        self._engines = [
+            make_engine(
+                name, self._scan_level,
+                verbose=self.verbose, quiet=self.quiet,
+                tags=self._tags, rules=self._rules,
+                include_best=self._include_best)
+            for name in self._engine_names
+        ]
 
         # Collect browser launch args from all engines
         launch_args = ['--disable-dev-shm-usage', '--disable-gpu']
@@ -524,18 +407,27 @@ class Scanner:
 
         Preserves auth state.  Called by the crawl loop every N pages.
         """
-        # Stop all engines
+        # Stop all engines.  Defensive swallow — we're tearing
+        # down before relaunch, so a stop failure shouldn't block
+        # restart.  Surface for debugging.
         for eng in self._engines:
             try:
                 await eng.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                if self.verbose:
+                    print(
+                        "  WARNING: engine stop failed during "
+                        "restart ({}): {}".format(
+                            type(eng).__name__, e),
+                        file=sys.stderr)
 
         # Close browser (Alfa's server dies with its subprocess)
         try:
             await self._browser.close()
-        except Exception:
-            pass
+        except Exception as e:
+            if self.verbose:
+                print("  WARNING: browser close failed during "
+                      "restart: {}".format(e), file=sys.stderr)
 
         # Relaunch — same logic as start()
         alfa_eng = None
@@ -591,8 +483,12 @@ class Scanner:
         if self._context:
             try:
                 await self._context.close()
-            except Exception:
-                pass
+            except Exception as e:
+                if self.verbose:
+                    print(
+                        "  WARNING: context close failed before "
+                        "relogin: {}".format(e),
+                        file=sys.stderr)
         return await self._do_login(reason)
 
     async def __aenter__(self):
@@ -626,22 +522,24 @@ class Scanner:
             return self._skip_result(
                 url, 'not HTML ({})'.format(content_type), t0)
 
-        # Content validation
-        content = await page.content()
-        if len(content or '') < 100:
+        # Content validation — combined into one CDP round-trip
+        # instead of three.  Returns the doc's contentType, the rendered
+        # HTML length, and a small prefix used to confirm <html>.
+        probe = await page.evaluate(
+            "({contentType: document.contentType,"
+            " htmlLength: document.documentElement.outerHTML.length,"
+            " htmlStart: document.documentElement"
+            ".outerHTML.substring(0, 80)})") or {}
+        html_length = probe.get('htmlLength') or 0
+        if html_length < 100:
             return self._skip_result(
-                url, 'empty response ({} bytes)'.format(
-                    len(content or '')), t0)
-
-        doc_ct = (await page.evaluate(
-            "document.contentType") or '').lower()
+                url, 'empty response ({} bytes)'.format(html_length), t0)
+        doc_ct = (probe.get('contentType') or '').lower()
         if doc_ct and doc_ct not in HTML_TYPES:
             return self._skip_result(
                 url, 'not HTML ({})'.format(doc_ct), t0)
-
-        page_start = await page.evaluate(
-            "document.documentElement.outerHTML.substring(0, 80)")
-        if page_start and '<html' not in (page_start or '').lower():
+        page_start = probe.get('htmlStart') or ''
+        if page_start and '<html' not in page_start.lower():
             return self._skip_result(url, 'not HTML', t0)
 
         # Run all engines
@@ -674,8 +572,15 @@ class Scanner:
                     "Array.from(document.querySelectorAll('a[href]'))"
                     ".map(a=>a.href).filter(h=>h.startsWith('http'))")
                 links = raw_links or []
-            except Exception:
-                pass
+            except Exception as e:
+                # Link-extraction failure means the crawler won't
+                # follow this page's links.  Surface in verbose
+                # mode but don't abort — the scan results for this
+                # page are still valid.
+                if self.verbose:
+                    print(
+                        "  WARNING: link extraction failed for "
+                        "{}: {}".format(url, e), file=sys.stderr)
 
         actual_url = page.url
         elapsed = time.time() - t0
@@ -737,8 +642,14 @@ class Scanner:
                     if ni < len(nodes):
                         nodes[ni]['target'] = [res['selector']]
                         nodes[ni]['html'] = res['html']
-        except Exception:
-            pass  # keep original targets
+        except Exception as e:
+            # Resolver failure means selectors stay in their native
+            # engine form (axe ElementHandle, IBM xpath, etc.).
+            # Reports remain readable but selector quality drops, so
+            # surface the cause when verbose; never abort the scan.
+            if self.verbose:
+                print("  WARNING: element resolver failed: {}".format(e),
+                      file=sys.stderr)
 
     def _skip_result(self, url, reason, t0):
         """Build a result dict for a skipped page."""

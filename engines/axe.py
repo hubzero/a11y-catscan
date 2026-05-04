@@ -58,10 +58,38 @@ import os
 import re
 import sys
 
-from .base import Engine, SCRIPT_DIR
+from .base import Engine, SCRIPT_DIR, NODE_MODULES
+
+# Bundled axe-core JS path (constant relative to node_modules).
+AXE_JS_PATH = os.path.join(NODE_MODULES, 'axe-core', 'axe.min.js')
+
+_AXE_VERSION = None
+
+
+def get_axe_version():
+    """Read the bundled axe-core version from its JS header.
+
+    Cached after first call.  Returns 'unknown' if the file is
+    present but unparseable; 'not installed' if missing.
+    """
+    global _AXE_VERSION
+    if _AXE_VERSION is not None:
+        return _AXE_VERSION
+    try:
+        with open(AXE_JS_PATH, 'r') as f:
+            header = f.read(200)
+        m = re.search(r'axe v([\d.]+)', header)
+        _AXE_VERSION = m.group(1) if m else 'unknown'
+    except (IOError, OSError):
+        _AXE_VERSION = 'not installed'
+    return _AXE_VERSION
 from engine_mappings import (
     bp_category, aria_category,
     EARL_FAILED, EARL_CANTTELL, EARL_PASSED, EARL_INAPPLICABLE)
+
+
+_AXE_SC_TAG_RE = re.compile(r'^wcag(\d)(\d)(\d+)$')
+_AXE_LEVEL_TAG_RE = re.compile(r'^wcag\d+a')
 
 
 def _normalize_axe_tags(tags):
@@ -74,11 +102,11 @@ def _normalize_axe_tags(tags):
     out = []
     for tag in tags:
         # SC tags: wcag + single digit + single digit + one-or-more digits
-        m = re.match(r'^wcag(\d)(\d)(\d+)$', tag)
+        m = _AXE_SC_TAG_RE.match(tag)
         if m:
             out.append('sc-{}.{}.{}'.format(
                 m.group(1), m.group(2), m.group(3)))
-        elif re.match(r'^wcag\d+a', tag):
+        elif _AXE_LEVEL_TAG_RE.match(tag):
             # Level/version tags like wcag2a, wcag21aa — drop
             continue
         else:
@@ -222,14 +250,12 @@ class AxeEngine(Engine):
         self._run_opts = {}
 
     async def start(self, browser=None):
-        axe_path = os.path.join(
-            SCRIPT_DIR, 'node_modules', 'axe-core', 'axe.min.js')
-        if not os.path.exists(axe_path):
-            print("ERROR: axe-core not found at {}".format(axe_path),
+        if not os.path.exists(AXE_JS_PATH):
+            print("ERROR: axe-core not found at {}".format(AXE_JS_PATH),
                   file=sys.stderr)
             print("Run: npm install", file=sys.stderr)
-            raise FileNotFoundError(axe_path)
-        with open(axe_path, 'r') as f:
+            raise FileNotFoundError(AXE_JS_PATH)
+        with open(AXE_JS_PATH, 'r') as f:
             self._source = f.read()
 
         # Build run options — rules override tags

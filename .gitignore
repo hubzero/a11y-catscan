@@ -7,3 +7,8 @@ allowlist.yaml
 node_modules/
 cookies.json
 mcp_stderr.log
+.venv/
+.coverage
+.pytest_cache/
+.claude/
+.codex

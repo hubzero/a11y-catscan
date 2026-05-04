@@ -74,7 +74,7 @@ Rules:
 import os
 import sys
 
-from .base import Engine, SCRIPT_DIR
+from .base import Engine, SCRIPT_DIR, NODE_MODULES
 from engine_mappings import (
     htmlcs_code_to_sc, EARL_FAILED, EARL_CANTTELL)
 
@@ -200,8 +200,7 @@ class HtmlcsEngine(Engine):
 
     async def start(self, browser=None):
         htmlcs_path = os.path.join(
-            SCRIPT_DIR, 'node_modules',
-            'html_codesniffer', 'build', 'HTMLCS.js')
+            NODE_MODULES, 'html_codesniffer', 'build', 'HTMLCS.js')
         if not os.path.exists(htmlcs_path):
             print("ERROR: HTML_CodeSniffer not found. "
                   "Run: npm install", file=sys.stderr)

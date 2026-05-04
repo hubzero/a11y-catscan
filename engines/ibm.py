@@ -63,7 +63,7 @@ Rules:
 import os
 import sys
 
-from .base import Engine, SCRIPT_DIR
+from .base import Engine, SCRIPT_DIR, NODE_MODULES
 from engine_mappings import (
     ibm_rule_to_tags, bp_category, aria_category,
     EARL_FAILED, EARL_CANTTELL)
@@ -127,8 +127,7 @@ class IbmEngine(Engine):
 
     async def start(self, browser=None):
         ace_path = os.path.join(
-            SCRIPT_DIR, 'node_modules',
-            'accessibility-checker-engine', 'ace.js')
+            NODE_MODULES, 'accessibility-checker-engine', 'ace.js')
         if not os.path.exists(ace_path):
             print("ERROR: IBM Equal Access not found. "
                   "Run: npm install", file=sys.stderr)

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Crawl fixture index</title>
+</head>
+<body>
+  <h1>Crawl fixture index</h1>
+  <p>
+    This page is the entry point for the crawl-loop integration test.
+    The crawler should follow the two links below and end up with
+    three pages scanned in total.
+  </p>
+  <ul>
+    <li><a href="/page-a.html">Page A</a></li>
+    <li><a href="/page-b.html">Page B</a></li>
+    <!-- An off-origin link that the crawler should ignore -->
+    <li><a href="https://example.test/elsewhere">Off-site link</a></li>
+  </ul>
+</body>
+</html>

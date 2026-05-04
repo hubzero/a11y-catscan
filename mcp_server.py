@@ -34,6 +34,7 @@ import os
 import re
 import sys
 import logging
+from urllib.parse import urlparse
 
 # MCP server must log to stderr — stdout is reserved for the protocol.
 logging.basicConfig(
@@ -51,23 +52,35 @@ from engine_mappings import (
     SC_META, sc_name, IBM_SC_MAP,
     EARL_FAILED, EARL_CANTTELL,
     ARIA_CATEGORIES, BP_CATEGORIES)
-from engines.axe import AXE_RULES
+from engines.axe import AXE_RULES, get_axe_version
 from engines.alfa import ALFA_RULES
 from engines.htmlcs import HTMLCS_SNIFFS
-from scanner import Scanner, count_nodes
+from engines.base import NODE_MODULES
+from scanner import Scanner
+from results import count_nodes
 
 mcp = FastMCP("wcag-audit")
 
 
-def _get_axe_version():
-    """Read axe-core version from the JS file header."""
-    axe_path = os.path.join(SCRIPT_DIR, 'node_modules', 'axe-core', 'axe.min.js')
-    try:
-        with open(axe_path) as f:
-            m = re.search(r'axe v([\d.]+)', f.read(200))
-            return m.group(1) if m else 'unknown'
-    except Exception:
-        return 'not installed'
+def _validate_scan_url(url):
+    """Reject scan_page URLs whose scheme isn't http/https.
+
+    The MCP tool's docstring promises http(s) only — without
+    enforcement an MCP client (or a prompt-injection attack against
+    the orchestrating LLM) could request `file://` or `chrome://`
+    URLs and exfiltrate local content via the returned finding
+    selectors / HTML snippets.  Returns an error message string if
+    the URL should be rejected, or None if it's safe to scan.
+    """
+    if not isinstance(url, str) or not url:
+        return 'url must be a non-empty string'
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https'):
+        return ("url scheme must be http or https "
+                "(got: '{}')").format(parsed.scheme or '(empty)')
+    if not parsed.netloc:
+        return 'url must include a host'
+    return None
 
 
 @mcp.tool()
@@ -91,6 +104,10 @@ async def scan_page(
         JSON with url, clean (bool), failed/cantTell counts, deduped
         findings array with CSS selectors and engine attribution.
     """
+    err = _validate_scan_url(url)
+    if err:
+        return json.dumps({'error': err, 'url': url})
+
     engine_list = (['axe', 'alfa', 'ibm', 'htmlcs'] if engines == 'all'
                    else [e.strip() for e in engines.split(',')])
 
@@ -250,20 +267,20 @@ async def list_engines() -> str:
     """
     engines = []
     checks = [
-        ('axe', 'axe-core (Deque)', _get_axe_version(), len(AXE_RULES),
+        ('axe', 'axe-core (Deque)', get_axe_version(), len(AXE_RULES),
          'browser injection',
-         os.path.join(SCRIPT_DIR, 'node_modules', 'axe-core', 'axe.min.js')),
+         os.path.join(NODE_MODULES, 'axe-core', 'axe.min.js')),
         ('ibm', 'IBM Equal Access', '4.0.16', 158,
          'browser injection',
-         os.path.join(SCRIPT_DIR, 'node_modules',
+         os.path.join(NODE_MODULES,
                       'accessibility-checker-engine', 'ace.js')),
         ('htmlcs', 'HTML_CodeSniffer', '2.5.1', len(HTMLCS_SNIFFS),
          'browser injection',
-         os.path.join(SCRIPT_DIR, 'node_modules',
+         os.path.join(NODE_MODULES,
                       'html_codesniffer', 'build', 'HTMLCS.js')),
         ('alfa', 'Siteimprove Alfa', '0.114.3', len(ALFA_RULES),
          'Node.js subprocess via CDP',
-         os.path.join(SCRIPT_DIR, 'node_modules',
+         os.path.join(NODE_MODULES,
                       '@siteimprove', 'alfa-rules')),
     ]
     for name, full, ver, rules, typ, path in checks:
