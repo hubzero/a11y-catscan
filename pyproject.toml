@@ -1,0 +1,32 @@
+[project]
+name = "a11y-catscan"
+version = "1.0.0"
+description = "WCAG accessibility scanner — four engines: axe-core, Siteimprove Alfa, IBM Equal Access, HTML_CodeSniffer"
+requires-python = ">=3.12"
+dependencies = [
+    # Browser orchestration.  Bumping this also requires
+    # `playwright install chromium` and matching the npm
+    # `playwright` version so browser binaries stay in lockstep
+    # with the CDP protocol expected by Alfa's Node.js subprocess.
+    "playwright>=1.58,<2",
+    "pyyaml>=6.0.3,<7",
+    # MCP server — exposes scan_page, analyze_report, etc. as
+    # tools to Claude Code.  Optional at runtime; only loaded
+    # when `a11y-catscan.py --mcp` is invoked.
+    "mcp>=1.27,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9",
+    "pytest-asyncio>=1.3",
+    "pytest-cov>=7",
+    "pip-audit>=2.10",
+    "pyupgrade>=3.21",
+]
+
+# The CLI lives in `a11y-catscan.py` (hyphenated filename so it
+# can be invoked directly as `./a11y-catscan.py`).  No
+# `[project.scripts]` entry — the hyphen prevents Python from
+# importing it as a module, and the CLI is meant to run as a
+# self-contained script next to its `node_modules/`.
