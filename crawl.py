@@ -454,395 +454,395 @@ def crawl_and_scan(
             except Exception:
                 pass
 
-                # Recovery mode events (crawl-level, not in Scanner)
-                _recovery_mode = asyncio.Event()
-                _recovery_done = asyncio.Event()
-                _suspect_urls = []
+            # Recovery mode events (crawl-level, not in Scanner)
+            _recovery_mode = asyncio.Event()
+            _recovery_done = asyncio.Event()
+            _suspect_urls = []
 
-                async def _scan(url, worker_id=0,
-                                skip_rate_limit=False):
-                    """Scan one URL using Scanner + crawl-level checks."""
-                    if _recovery_mode.is_set():
-                        await _recovery_done.wait()
+            async def _scan(url, worker_id=0,
+                            skip_rate_limit=False):
+                """Scan one URL using Scanner + crawl-level checks."""
+                if _recovery_mode.is_set():
+                    await _recovery_done.wait()
 
-                    if not skip_rate_limit:
-                        delay = rate_limiter.wait_time()
-                        if delay > 0:
-                            await asyncio.sleep(delay)
+                if not skip_rate_limit:
+                    delay = rate_limiter.wait_time()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
 
-                    # Scanner handles: navigate, validate, run
-                    # engines, resolve elements, close page.
-                    result = await scanner.scan_page(
-                        url, extract_links=(not no_crawl),
-                        dedup=False)  # dedup at report time
+                # Scanner handles: navigate, validate, run
+                # engines, resolve elements, close page.
+                result = await scanner.scan_page(
+                    url, extract_links=(not no_crawl),
+                    dedup=False)  # dedup at report time
 
-                    if result.get('skipped'):
-                        _vskip(url, result['skipped'])
-                        return None
-
-                    # Crawl-level checks that Scanner doesn't handle:
-                    actual = normalize_url(result.get('url', url))
-
-                    # Origin check
-                    if not is_same_origin(result['url'], base_url):
-                        _vskip(url, "redirect off-origin → {}".format(
-                            result['url']))
-                        return None
-
-                    # Redirect dedup
-                    if actual != url:
-                        if actual in visited:
-                            _vskip(
-                                url,
-                                "redirect → {} (already visited)"
-                                .format(actual))
-                            return None
-                        visited.add(actual)
-                        if verbose and not quiet:
-                            print("  redirect: {} → {}".format(
-                                url, actual))
-
-                    # Session check (triggers recovery if lost)
-                    # Scanner exposes check_session but we need
-                    # a page to check — do it via a quick test
-                    # only if we have auth configured.
-                    # Note: Scanner already checked during scan.
-                    # For mid-scan expiry, we rely on the login
-                    # plugin's is_logged_in check which Scanner
-                    # doesn't call (crawl-level concern).
-                    # TODO: expose session check in Scanner results
-
-                    new_links = [
-                        normalize_url(lnk)
-                        for lnk in result.get('links', [])
-                        if lnk]
-
-                    elapsed = result.get('elapsed', 0)
-                    # Build page_data in the format _write_page
-                    # expects
-                    page_data = {
-                        'url': actual,
-                        'timestamp': result.get('timestamp', ''),
-                        'http_status': result.get('http_status'),
-                        EARL_FAILED: result.get(EARL_FAILED, []),
-                        EARL_CANTTELL: result.get(EARL_CANTTELL, []),
-                        EARL_PASSED: result.get(EARL_PASSED, []),
-                        EARL_INAPPLICABLE: result.get(
-                            EARL_INAPPLICABLE, []),
-                    }
-                    return (actual, page_data,
-                            new_links, worker_id, elapsed)
-
-                # Merge login plugin exclude_paths into the scan
-                # filter
-                _all_exclude = list(exclude_paths or [])
-                _all_exclude.extend(scanner.login_exclude_paths)
-
-                def _next_url():
-                    """Pull the next scannable URL from the queue."""
-                    while queue:
-                        url = queue.popleft()
-                        if url in visited or url in _logout_urls:
-                            continue
-                        visited.add(url)
-                        if should_scan(
-                                url, base_url, include_paths,
-                                _all_exclude, exclude_regex,
-                                robots_parser):
-                            return url
+                if result.get('skipped'):
+                    _vskip(url, result['skipped'])
                     return None
 
-                # Fill initial window with staggered starts.
-                # Worker IDs start at 1 for display.
-                pending = {}
-                next_worker_id = 1
-                # Stagger initial starts by the crawl delay (not
-                # page_wait) so each worker's first request is
-                # spaced at the rate limit interval.
-                stagger = max(crawl_delay, 1) if crawl_delay else (
-                    page_wait / max(num_workers, 1))
+                # Crawl-level checks that Scanner doesn't handle:
+                actual = normalize_url(result.get('url', url))
 
-                def _make_staggered(u, delay, w):
-                    """Factory to avoid closure capture bug."""
+                # Origin check
+                if not is_same_origin(result['url'], base_url):
+                    _vskip(url, "redirect off-origin → {}".format(
+                        result['url']))
+                    return None
 
-                    async def _task():
-                        if delay > 0:
-                            await asyncio.sleep(delay)
-                        return await _scan(
-                            u, worker_id=w, skip_rate_limit=True)
-                    return _task
+                # Redirect dedup
+                if actual != url:
+                    if actual in visited:
+                        _vskip(
+                            url,
+                            "redirect → {} (already visited)"
+                            .format(actual))
+                        return None
+                    visited.add(actual)
+                    if verbose and not quiet:
+                        print("  redirect: {} → {}".format(
+                            url, actual))
 
-                for i in range(num_workers):
-                    url = _next_url()
-                    if url is None or page_count >= max_pages:
-                        break
-                    wid = next_worker_id
-                    next_worker_id += 1
-                    task = asyncio.create_task(
-                        _make_staggered(url, i * stagger, wid)())
-                    pending[task] = url
+                # Session check (triggers recovery if lost)
+                # Scanner exposes check_session but we need
+                # a page to check — do it via a quick test
+                # only if we have auth configured.
+                # Note: Scanner already checked during scan.
+                # For mid-scan expiry, we rely on the login
+                # plugin's is_logged_in check which Scanner
+                # doesn't call (crawl-level concern).
+                # TODO: expose session check in Scanner results
 
-                # Track which worker IDs are in use.
-                # task_workers maps task -> worker_id
-                task_workers = {}
-                active_wids = set()
-                for i, task in enumerate(pending.keys()):
-                    wid = i + 1
-                    task_workers[task] = wid
-                    active_wids.add(wid)
+                new_links = [
+                    normalize_url(lnk)
+                    for lnk in result.get('links', [])
+                    if lnk]
 
-                def _free_wid():
-                    """Return the lowest available worker ID."""
-                    for w in range(1, num_workers + 1):
-                        if w not in active_wids:
-                            return w
-                    return num_workers  # shouldn't happen
+                elapsed = result.get('elapsed', 0)
+                # Build page_data in the format _write_page
+                # expects
+                page_data = {
+                    'url': actual,
+                    'timestamp': result.get('timestamp', ''),
+                    'http_status': result.get('http_status'),
+                    EARL_FAILED: result.get(EARL_FAILED, []),
+                    EARL_CANTTELL: result.get(EARL_CANTTELL, []),
+                    EARL_PASSED: result.get(EARL_PASSED, []),
+                    EARL_INAPPLICABLE: result.get(
+                        EARL_INAPPLICABLE, []),
+                }
+                return (actual, page_data,
+                        new_links, worker_id, elapsed)
 
-                async def _drain_pending():
-                    """Wait for all in-flight tasks to finish.
+            # Merge login plugin exclude_paths into the scan
+            # filter
+            _all_exclude = list(exclude_paths or [])
+            _all_exclude.extend(scanner.login_exclude_paths)
 
-                    Used by the recovery and browser-restart paths
-                    to bring the worker pool to a quiescent state.
-                    For each completed task: write its page,
-                    accumulate timing, enqueue any newly discovered
-                    links.
+            def _next_url():
+                """Pull the next scannable URL from the queue."""
+                while queue:
+                    url = queue.popleft()
+                    if url in visited or url in _logout_urls:
+                        continue
+                    visited.add(url)
+                    if should_scan(
+                            url, base_url, include_paths,
+                            _all_exclude, exclude_regex,
+                            robots_parser):
+                        return url
+                return None
 
-                    Worker-task exceptions are swallowed here
-                    because each `_scan` already has its own
-                    per-page error handling (skip_result on
-                    navigation failure, etc.) and a hard exception
-                    from a worker task means the page is
-                    unrecoverable for this scan.  Surface the
-                    cause in verbose mode so it's visible during
-                    debugging.
-                    """
-                    nonlocal page_count, total_page_time
-                    while pending:
-                        d, _ = await asyncio.wait(
-                            pending.keys(),
-                            return_when=asyncio.FIRST_COMPLETED)
-                        for t in d:
-                            url_for_task = pending.pop(t, None)
-                            task_workers.pop(t, None)
-                            try:
-                                r = t.result()
-                            except Exception as e:
-                                if verbose:
-                                    print(
-                                        "  WARNING: drain task for "
-                                        "{} raised: {}".format(
-                                            url_for_task, e),
-                                        file=sys.stderr)
-                                r = None
-                            if r is not None:
-                                page_count += 1
-                                u, pd, nl, _w, el = r
-                                total_page_time += el
-                                # Single-writer: still on main loop;
-                                # see _write_page docstring.
-                                _write_page(u, pd)
-                                for lnk in nl:
-                                    if (lnk not in visited
-                                            and lnk not in queue):
-                                        queue.append(lnk)
+            # Fill initial window with staggered starts.
+            # Worker IDs start at 1 for display.
+            pending = {}
+            next_worker_id = 1
+            # Stagger initial starts by the crawl delay (not
+            # page_wait) so each worker's first request is
+            # spaced at the rate limit interval.
+            stagger = max(crawl_delay, 1) if crawl_delay else (
+                page_wait / max(num_workers, 1))
 
-                # Sliding window: as each finishes, print result,
-                # feed discovered links, fill empty worker slots.
-                while pending and not interrupted:
-                    done, _ = await asyncio.wait(
+            def _make_staggered(u, delay, w):
+                """Factory to avoid closure capture bug."""
+
+                async def _task():
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    return await _scan(
+                        u, worker_id=w, skip_rate_limit=True)
+                return _task
+
+            for i in range(num_workers):
+                url = _next_url()
+                if url is None or page_count >= max_pages:
+                    break
+                wid = next_worker_id
+                next_worker_id += 1
+                task = asyncio.create_task(
+                    _make_staggered(url, i * stagger, wid)())
+                pending[task] = url
+
+            # Track which worker IDs are in use.
+            # task_workers maps task -> worker_id
+            task_workers = {}
+            active_wids = set()
+            for i, task in enumerate(pending.keys()):
+                wid = i + 1
+                task_workers[task] = wid
+                active_wids.add(wid)
+
+            def _free_wid():
+                """Return the lowest available worker ID."""
+                for w in range(1, num_workers + 1):
+                    if w not in active_wids:
+                        return w
+                return num_workers  # shouldn't happen
+
+            async def _drain_pending():
+                """Wait for all in-flight tasks to finish.
+
+                Used by the recovery and browser-restart paths
+                to bring the worker pool to a quiescent state.
+                For each completed task: write its page,
+                accumulate timing, enqueue any newly discovered
+                links.
+
+                Worker-task exceptions are swallowed here
+                because each `_scan` already has its own
+                per-page error handling (skip_result on
+                navigation failure, etc.) and a hard exception
+                from a worker task means the page is
+                unrecoverable for this scan.  Surface the
+                cause in verbose mode so it's visible during
+                debugging.
+                """
+                nonlocal page_count, total_page_time
+                while pending:
+                    d, _ = await asyncio.wait(
                         pending.keys(),
                         return_when=asyncio.FIRST_COMPLETED)
-
-                    # Collect freed worker IDs from completed tasks
-                    freed_wids = []
-                    for task in done:
-                        del pending[task]
-                        wid = task_workers.pop(task, 0)
-                        active_wids.discard(wid)
-                        freed_wids.append(wid)
-
-                        page_count += 1
-                        result = None
+                    for t in d:
+                        url_for_task = pending.pop(t, None)
+                        task_workers.pop(t, None)
                         try:
-                            result = task.result()
+                            r = t.result()
                         except Exception as e:
-                            # Worker-task exception → page
-                            # unrecoverable for this scan.  Already
-                            # handled per-page via skip_result;
-                            # surface here for verbose debugging
-                            # only.
                             if verbose:
                                 print(
-                                    "  WARNING: scan task raised: "
-                                    "{}".format(e), file=sys.stderr)
+                                    "  WARNING: drain task for "
+                                    "{} raised: {}".format(
+                                        url_for_task, e),
+                                    file=sys.stderr)
+                            r = None
+                        if r is not None:
+                            page_count += 1
+                            u, pd, nl, _w, el = r
+                            total_page_time += el
+                            # Single-writer: still on main loop;
+                            # see _write_page docstring.
+                            _write_page(u, pd)
+                            for lnk in nl:
+                                if (lnk not in visited
+                                        and lnk not in queue):
+                                    queue.append(lnk)
 
-                        if result is not None:
-                            url, page_data, new_links, _, elapsed = (
-                                result)
-                            total_page_time += elapsed
-                            v_count = count_nodes(
-                                page_data.get(EARL_FAILED, []))
-                            i_count = count_nodes(
-                                page_data.get(EARL_CANTTELL, []))
-                            if not quiet:
-                                pw_w = len(str(max_pages))
-                                parts = []
-                                if v_count:
-                                    parts.append(
-                                        f'{v_count} failed')
-                                if i_count:
-                                    parts.append(
-                                        '{} cantTell'.format(
-                                            i_count))
-                                ss = (', '.join(parts)
-                                      if parts else 'clean')
+            # Sliding window: as each finishes, print result,
+            # feed discovered links, fill empty worker slots.
+            while pending and not interrupted:
+                done, _ = await asyncio.wait(
+                    pending.keys(),
+                    return_when=asyncio.FIRST_COMPLETED)
+
+                # Collect freed worker IDs from completed tasks
+                freed_wids = []
+                for task in done:
+                    del pending[task]
+                    wid = task_workers.pop(task, 0)
+                    active_wids.discard(wid)
+                    freed_wids.append(wid)
+
+                    page_count += 1
+                    result = None
+                    try:
+                        result = task.result()
+                    except Exception as e:
+                        # Worker-task exception → page
+                        # unrecoverable for this scan.  Already
+                        # handled per-page via skip_result;
+                        # surface here for verbose debugging
+                        # only.
+                        if verbose:
+                            print(
+                                "  WARNING: scan task raised: "
+                                "{}".format(e), file=sys.stderr)
+
+                    if result is not None:
+                        url, page_data, new_links, _, elapsed = (
+                            result)
+                        total_page_time += elapsed
+                        v_count = count_nodes(
+                            page_data.get(EARL_FAILED, []))
+                        i_count = count_nodes(
+                            page_data.get(EARL_CANTTELL, []))
+                        if not quiet:
+                            pw_w = len(str(max_pages))
+                            parts = []
+                            if v_count:
+                                parts.append(
+                                    f'{v_count} failed')
+                            if i_count:
+                                parts.append(
+                                    '{} cantTell'.format(
+                                        i_count))
+                            ss = (', '.join(parts)
+                                  if parts else 'clean')
+                            print(
+                                "[{}/{}] W{} {} — {} "
+                                "({:.1f}s)".format(
+                                    str(page_count).rjust(pw_w),
+                                    max_pages, wid, url, ss,
+                                    elapsed))
+                            if verbose:
                                 print(
-                                    "[{}/{}] W{} {} — {} "
-                                    "({:.1f}s)".format(
-                                        str(page_count).rjust(pw_w),
-                                        max_pages, wid, url, ss,
-                                        elapsed))
-                                if verbose:
-                                    print(
-                                        "  V: {} ({} nodes), I: "
-                                        "{} ({} nodes), Queue: {}"
-                                        .format(
-                                            len(page_data.get(
-                                                EARL_FAILED, [])),
-                                            v_count,
-                                            len(page_data.get(
-                                                EARL_CANTTELL, [])),
-                                            i_count, len(queue)))
-                            # Single-writer: called from main loop
-                            # only, never from worker tasks.
-                            # See _write_page.
-                            _write_page(url, page_data)
+                                    "  V: {} ({} nodes), I: "
+                                    "{} ({} nodes), Queue: {}"
+                                    .format(
+                                        len(page_data.get(
+                                            EARL_FAILED, [])),
+                                        v_count,
+                                        len(page_data.get(
+                                            EARL_CANTTELL, [])),
+                                        i_count, len(queue)))
+                        # Single-writer: called from main loop
+                        # only, never from worker tasks.
+                        # See _write_page.
+                        _write_page(url, page_data)
 
-                            for link in new_links:
-                                if (link not in visited
-                                        and link not in queue):
-                                    queue.append(link)
+                        for link in new_links:
+                            if (link not in visited
+                                    and link not in queue):
+                                queue.append(link)
+                    else:
+                        page_count -= 1
+
+                # Recovery mode: drain all workers, re-login,
+                # test suspect URLs serially, then resume.
+                if (_recovery_mode.is_set()
+                        and scanner.context):
+                    await _drain_pending()
+                    active_wids.clear()
+
+                    if not quiet:
+                        print(
+                            "  [recovery: {} suspect URLs, "
+                            "re-logging in]".format(
+                                len(_suspect_urls)))
+
+                    # Re-login via Scanner
+                    ctx, _ = await scanner.relogin('recovery')
+
+                    # Test each suspect URL serially
+                    safe_urls = []
+                    for surl in list(_suspect_urls):
+                        result = await scanner.scan_page(
+                            surl, dedup=False)
+                        if result.get('skipped'):
+                            safe_urls.append(surl)
                         else:
-                            page_count -= 1
+                            # Check session after scanning
+                            # If page loaded without skipping,
+                            # assume session is OK. If the page
+                            # triggered a logout, the next scan
+                            # will detect it.
+                            safe_urls.append(surl)
 
-                    # Recovery mode: drain all workers, re-login,
-                    # test suspect URLs serially, then resume.
-                    if (_recovery_mode.is_set()
-                            and scanner.context):
-                        await _drain_pending()
-                        active_wids.clear()
+                    # Requeue safe URLs
+                    for surl in safe_urls:
+                        if surl not in visited:
+                            queue.appendleft(surl)
+                    _suspect_urls.clear()
 
-                        if not quiet:
-                            print(
-                                "  [recovery: {} suspect URLs, "
-                                "re-logging in]".format(
-                                    len(_suspect_urls)))
+                    _recovery_mode.clear()
+                    _recovery_done.set()
 
-                        # Re-login via Scanner
-                        ctx, _ = await scanner.relogin('recovery')
+                    if not quiet:
+                        print(
+                            "  [recovery done: {} banned, "
+                            "{} requeued]".format(
+                                len(_logout_urls),
+                                len(safe_urls)))
 
-                        # Test each suspect URL serially
-                        safe_urls = []
-                        for surl in list(_suspect_urls):
-                            result = await scanner.scan_page(
-                                surl, dedup=False)
-                            if result.get('skipped'):
-                                safe_urls.append(surl)
-                            else:
-                                # Check session after scanning
-                                # If page loaded without skipping,
-                                # assume session is OK. If the page
-                                # triggered a logout, the next scan
-                                # will detect it.
-                                safe_urls.append(surl)
+                # Fill empty slots with freed worker IDs first,
+                # then allocate new ones if needed.
+                while (len(pending) < num_workers
+                       and (page_count + len(pending)
+                            < max_pages)):
+                    next_url = _next_url()
+                    if next_url is None:
+                        break
+                    if freed_wids:
+                        wid = freed_wids.pop(0)
+                    else:
+                        wid = _free_wid()
+                    active_wids.add(wid)
+                    t = asyncio.create_task(
+                        _scan(next_url, worker_id=wid))
+                    pending[t] = next_url
+                    task_workers[t] = wid
 
-                        # Requeue safe URLs
-                        for surl in safe_urls:
-                            if surl not in visited:
-                                queue.appendleft(surl)
-                        _suspect_urls.clear()
+                if (json_path and save_every
+                        and page_count % save_every == 0):
+                    _flush()
 
-                        _recovery_mode.clear()
-                        _recovery_done.set()
+                # Restart browser periodically to prevent
+                # memory leaks.  Wait for all in-flight pages
+                # to finish first.
+                if (restart_every and page_count > 0
+                        and page_count % restart_every == 0
+                        and page_count < max_pages):
+                    await _drain_pending()
+                    # Restart browser + engines to prevent
+                    # Chromium memory leaks.
+                    if not quiet:
+                        print(
+                            "  [restarting browser after "
+                            "{} pages]".format(page_count))
+                    await scanner.restart_browser()
+                    try:
+                        register_browser_pid(
+                            scanner.browser.process.pid)
+                    except Exception:
+                        pass
+                    active_wids.clear()
 
-                        if not quiet:
-                            print(
-                                "  [recovery done: {} banned, "
-                                "{} requeued]".format(
-                                    len(_logout_urls),
-                                    len(safe_urls)))
-
-                    # Fill empty slots with freed worker IDs first,
-                    # then allocate new ones if needed.
-                    while (len(pending) < num_workers
-                           and (page_count + len(pending)
-                                < max_pages)):
+                    # Refill the sliding window after restart
+                    for i in range(num_workers):
+                        if (page_count + len(pending)
+                                >= max_pages):
+                            break
                         next_url = _next_url()
                         if next_url is None:
                             break
-                        if freed_wids:
-                            wid = freed_wids.pop(0)
-                        else:
-                            wid = _free_wid()
+                        wid = i + 1
                         active_wids.add(wid)
                         t = asyncio.create_task(
                             _scan(next_url, worker_id=wid))
                         pending[t] = next_url
                         task_workers[t] = wid
 
-                    if (json_path and save_every
-                            and page_count % save_every == 0):
-                        _flush()
+            # Cancel any in-flight tasks (e.g. after ^C) so
+            # Python doesn't dump "Task exception was never
+            # retrieved" tracebacks at shutdown.
+            for task in list(pending.keys()):
+                task.cancel()
+            for task in list(pending.keys()):
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
-                    # Restart browser periodically to prevent
-                    # memory leaks.  Wait for all in-flight pages
-                    # to finish first.
-                    if (restart_every and page_count > 0
-                            and page_count % restart_every == 0
-                            and page_count < max_pages):
-                        await _drain_pending()
-                        # Restart browser + engines to prevent
-                        # Chromium memory leaks.
-                        if not quiet:
-                            print(
-                                "  [restarting browser after "
-                                "{} pages]".format(page_count))
-                        await scanner.restart_browser()
-                        try:
-                            register_browser_pid(
-                                scanner.browser.process.pid)
-                        except Exception:
-                            pass
-                        active_wids.clear()
-
-                        # Refill the sliding window after restart
-                        for i in range(num_workers):
-                            if (page_count + len(pending)
-                                    >= max_pages):
-                                break
-                            next_url = _next_url()
-                            if next_url is None:
-                                break
-                            wid = i + 1
-                            active_wids.add(wid)
-                            t = asyncio.create_task(
-                                _scan(next_url, worker_id=wid))
-                            pending[t] = next_url
-                            task_workers[t] = wid
-
-                # Cancel any in-flight tasks (e.g. after ^C) so
-                # Python doesn't dump "Task exception was never
-                # retrieved" tracebacks at shutdown.
-                for task in list(pending.keys()):
-                    task.cancel()
-                for task in list(pending.keys()):
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):
-                        pass
-
-                # Shut down scanner (engines + browser)
-                await scanner.stop()
+            # Shut down scanner (engines + browser)
+            await scanner.stop()
 
         try:
             asyncio.run(_pw_sliding_window())

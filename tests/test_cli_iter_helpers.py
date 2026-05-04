@@ -45,6 +45,22 @@ class TestIterJsonl:
         records = list(cli.iter_jsonl(str(path)))
         assert len(records) == 1
 
+    def test_skips_non_object_json_lines(self, cli, tmp_path,
+                                         capsys):
+        # Valid JSON that isn't a {url: data} object — e.g. a
+        # list, a literal, or null — must be skipped with a
+        # warning instead of crashing on .items().
+        path = tmp_path / 's.jsonl'
+        path.write_text(
+            json.dumps({'http://a/': {}}) + '\n' +
+            json.dumps([1, 2, 3]) + '\n' +
+            'true\n' +
+            json.dumps({'http://b/': {}}) + '\n')
+        urls = [u for u, _ in cli.iter_jsonl(str(path))]
+        assert urls == ['http://a/', 'http://b/']
+        err = capsys.readouterr().err.lower()
+        assert 'not an object' in err or 'corrupt' in err
+
 
 # ── _iter_report (auto-detect) ────────────────────────────────
 

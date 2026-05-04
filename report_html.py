@@ -38,6 +38,19 @@ def _esc(text):
             .replace("'", '&#39;'))
 
 
+def _safe_impact(impact):
+    """Whitelist impact to a known CSS-class value.
+
+    `impact` flows in from engine result dicts; when the report is
+    generated from a foreign JSONL (registry, MCP) a malformed
+    value (`x"><script>...`) would otherwise land in HTML class /
+    attribute context unescaped.  Anything outside the four
+    canonical values collapses to `unknown` so neither the class
+    name nor the badge gets injected.
+    """
+    return impact if impact in _IMPACT_COLORS else 'unknown'
+
+
 def _render_nodes_html(nodes, limit=20, snippet_max=500):
     """Render the per-node detail block (selectors, HTML, messages)."""
     parts = []
@@ -321,7 +334,7 @@ def _render_html_report(out, now, axe_ver, start_url, level_label,
         w('<table><tr><th>Rule</th><th>Impact</th><th>Issues</th>'
           '<th>Pages</th><th>Description</th></tr>')
         for rule_id, info in sorted_rules:
-            impact = info['impact']
+            impact = _safe_impact(info['impact'])
             w('<tr><td><a href="{url}">{id}</a></td>'
               '<td><span class="badge badge-{imp}">'
               '{imp_cap}</span></td>'
@@ -381,7 +394,7 @@ def _render_html_report(out, now, axe_ver, start_url, level_label,
               len(shown_incomplete), i_count))
 
         for v in violations:
-            impact = v.get('impact', 'unknown')
+            impact = _safe_impact(v.get('impact', 'unknown'))
             w(f'<div class="rule-card impact-{impact}">')
             w('<strong><span class="badge badge-{}">{}</span> '
               '<a href="{}">{}</a></strong>'.format(

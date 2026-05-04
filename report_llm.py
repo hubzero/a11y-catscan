@@ -8,6 +8,7 @@ examples) and incompletes by axe `messageKey`.
 
 import os
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 from engine_mappings import (
@@ -193,10 +194,13 @@ def generate_llm_report(jsonl_path, output_path, start_url,
         lines.append('## Suppressed (allowlist): {} nodes\n'.format(
             suppressed_count))
 
-    # Point to full reports for deeper investigation
-    json_sibling = output_path.replace('.md', '.json')
-    jsonl_sibling = output_path.replace('.md', '.jsonl')
-    html_sibling = output_path.replace('.md', '.html')
+    # Point to full reports for deeper investigation.  Path.with_suffix
+    # only swaps the final extension — `output_path.replace('.md', ...)`
+    # would corrupt paths whose directory components contain '.md'.
+    out_path = Path(output_path)
+    json_sibling = str(out_path.with_suffix('.json'))
+    jsonl_sibling = str(out_path.with_suffix('.jsonl'))
+    html_sibling = str(out_path.with_suffix('.html'))
     lines.append('## Detailed reports\n')
     lines.append(
         'This is a summary.  For full per-page, per-node details:')

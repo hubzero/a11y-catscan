@@ -80,6 +80,32 @@ class TestGenerateHtmlReport:
         body = out.read_text().lower()
         assert 'suppress' in body  # report mentions suppression
 
+    def test_malicious_impact_value_does_not_inject_html(
+            self, cli, tmp_path, jsonl_factory,
+            make_finding, make_page):
+        # `impact` flows in from the result dict and is used in
+        # HTML class names and badge text.  A foreign JSONL with
+        # a malformed impact field must not be able to inject
+        # script tags.  _safe_impact whitelists to the four
+        # canonical values.
+        bad = make_finding(
+            'image-alt', EARL_FAILED, engine='axe',
+            tags=['sc-1.1.1'], selector='#x')
+        bad['impact'] = 'x"><script>alert(1)</script>'
+        page = make_page('https://example.test/p', failed=[bad])
+        jsonl = jsonl_factory(
+            [('https://example.test/p', page)])
+
+        out = tmp_path / 'r.html'
+        cli.generate_html_report(
+            jsonl, str(out), 'https://example.test/')
+        body = out.read_text()
+        assert '<script>' not in body
+        # The malicious string should not appear at all — _safe_impact
+        # collapses it to 'unknown' and the badge code never runs
+        # for unknown impacts.
+        assert 'alert(1)' not in body
+
 
 # ── generate_llm_report ───────────────────────────────────────
 

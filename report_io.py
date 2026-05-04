@@ -29,7 +29,9 @@ def iter_jsonl(jsonl_path):
     """Iterate (url, data) pairs from a JSONL results file.
 
     Skips blank or corrupt lines (e.g. from a partial write after a
-    crash).  Corrupt lines are reported on stderr but do not raise.
+    crash) and lines whose JSON parses to something other than a
+    URL→data object.  Corrupt lines are reported on stderr but
+    never raise.
     """
     with open(jsonl_path) as f:
         for lineno, line in enumerate(f, 1):
@@ -39,8 +41,16 @@ def iter_jsonl(jsonl_path):
             try:
                 obj = json.loads(line)
             except (json.JSONDecodeError, ValueError):
-                print("  WARNING: corrupt JSONL line {} in {}, "
-                      "skipping".format(lineno, jsonl_path),
+                print(f"  WARNING: corrupt JSONL line {lineno} in "
+                      f"{jsonl_path}, skipping",
+                      file=sys.stderr)
+                continue
+            if not isinstance(obj, dict):
+                # Valid JSON but not the expected {url: data} shape
+                # (e.g. a list, a string, or null).  Skip rather
+                # than crash on .items().
+                print(f"  WARNING: JSONL line {lineno} in "
+                      f"{jsonl_path} is not an object, skipping",
                       file=sys.stderr)
                 continue
             yield from obj.items()

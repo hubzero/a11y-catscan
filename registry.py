@@ -39,10 +39,26 @@ def _load_registry(path=None):
 
 
 def _save_registry(data, path=None):
+    """Atomically write the registry to disk.
+
+    Writes to a sibling temp file and `os.replace`s into place so a
+    crash mid-write can never produce a zero-byte registry — losing
+    every prior named scan would be a nasty UX regression.
+    """
     path = path or DEFAULT_REGISTRY_PATH
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=2, default=str)
+    tmp = path + '.tmp'
+    try:
+        with open(tmp, 'w') as f:
+            json.dump(data, f, indent=2, default=str)
+        os.replace(tmp, path)
+    except Exception:
+        # Leave the existing registry in place; clean up the tmp.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def register_scan(
