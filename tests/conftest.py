@@ -139,3 +139,17 @@ def jsonl_factory(tmp_path):
                 f.write(json.dumps({url: data}) + '\n')
         return str(path)
     return _build
+
+
+@pytest.fixture
+def isolated_registry(tmp_path, monkeypatch):
+    """Redirect registry.DEFAULT_REGISTRY_PATH to a tmp file.
+
+    Several tests register/list/delete scans through the registry
+    or the MCP `manage_scans` tool — this keeps each test's writes
+    contained so they don't pollute the developer's reports/scans.json.
+    """
+    import registry
+    fake = str(tmp_path / 'scans.json')
+    monkeypatch.setattr(registry, 'DEFAULT_REGISTRY_PATH', fake)
+    return fake

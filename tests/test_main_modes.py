@@ -16,14 +16,7 @@ import os
 
 import pytest
 
-
-@pytest.fixture
-def isolated_registry(tmp_path, monkeypatch):
-    """Redirect the scan registry to a tmp file."""
-    import registry
-    fake = str(tmp_path / 'scans.json')
-    monkeypatch.setattr(registry, 'DEFAULT_REGISTRY_PATH', fake)
-    return fake
+# isolated_registry fixture defined in tests/conftest.py
 
 
 def _run_main(cli, monkeypatch, argv):
@@ -80,18 +73,13 @@ class TestListScans:
             {'jsonl': '/tmp/scan.jsonl'},
             url='https://example.test/',
             engines=['axe', 'ibm'],
-            summary={'pages': 42, EARL: 'failed'} if False else
-                    {'pages': 42, 'failed': 5},
+            summary={'pages': 42, 'failed': 5},
             registry_path=isolated_registry)
         code = _run_main(cli, monkeypatch, ['--list-scans'])
         out = capsys.readouterr().out
         assert code == 0
         assert 'baseline' in out
         assert '42 pages' in out
-
-
-# Helper imported lazily to dodge the EARL-line trick above
-EARL = None  # noqa: E305 — sentinel only
 
 
 # ── --search ───────────────────────────────────────────────────

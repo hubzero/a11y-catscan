@@ -78,13 +78,7 @@ def _read_jsonl_urls(path):
     return urls
 
 
-@pytest.fixture
-def isolated_registry(tmp_path, monkeypatch):
-    """Same as in test_main_modes — keep registry writes contained."""
-    import registry
-    fake = str(tmp_path / 'scans.json')
-    monkeypatch.setattr(registry, 'DEFAULT_REGISTRY_PATH', fake)
-    return fake
+# isolated_registry fixture defined in tests/conftest.py
 
 
 class TestCrawlLoop:

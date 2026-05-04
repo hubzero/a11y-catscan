@@ -326,8 +326,14 @@ def crawl_and_scan(
 
         Uses write-to-temp + verify + atomic rename to avoid
         corrupting the state file on crash or disk-full.
+
+        Always writes when invoked: an empty queue is still
+        useful diagnostic state (visited URLs, pages_scanned,
+        logout bans).  With a single worker, the queue is
+        briefly empty between pages — refusing to write in that
+        window made SIGUSR1 snapshots flaky.
         """
-        if not json_path or no_crawl or not queue:
+        if not json_path or no_crawl:
             return
         # Path.with_suffix is correct here because it only swaps the
         # final extension — `json_path.replace('.json', ...)` would

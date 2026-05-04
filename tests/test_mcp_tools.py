@@ -10,10 +10,24 @@ shape downstream consumers depend on.
 
 import json
 import os
+import socket
+import threading
+import time
+from functools import partial
+from http.server import (
+    SimpleHTTPRequestHandler,
+    ThreadingHTTPServer,
+)
+from pathlib import Path
 
 import pytest
 
 from engine_mappings import EARL_FAILED, EARL_CANTTELL
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_FIXTURES = Path(__file__).resolve().parent / 'fixtures'
+_AXE_JS = _PROJECT_ROOT / 'node_modules' / 'axe-core' / 'axe.min.js'
 
 
 @pytest.fixture
@@ -23,19 +37,7 @@ def mcp_server_module():
     return mcp_server
 
 
-@pytest.fixture
-def isolated_registry(tmp_path, monkeypatch):
-    """Redirect registry.DEFAULT_REGISTRY_PATH to a tmp file.
-
-    The MCP `manage_scans` tool calls list_scans() / get_scan() /
-    delete_scan() without an explicit path, so they fall through to
-    the module-level default. Patching that lets each test work
-    against a clean registry file.
-    """
-    import registry
-    fake = str(tmp_path / 'scans.json')
-    monkeypatch.setattr(registry, 'DEFAULT_REGISTRY_PATH', fake)
-    return fake
+# isolated_registry fixture defined in tests/conftest.py
 
 
 @pytest.fixture
@@ -555,22 +557,8 @@ class TestScanPageUrlValidation:
 
 # ── scan_page (MCP wrapper) ───────────────────────────────────
 
-import socket as _socket
-import threading as _threading
-import time as _time
-from functools import partial as _partial
-from http.server import (
-    ThreadingHTTPServer as _ThreadingHTTPServer,
-    SimpleHTTPRequestHandler as _SimpleHTTPRequestHandler,
-)
-from pathlib import Path as _Path
 
-_PROJECT_ROOT = _Path(__file__).resolve().parent.parent
-_FIXTURES = _Path(__file__).resolve().parent / 'fixtures'
-_AXE_JS = _PROJECT_ROOT / 'node_modules' / 'axe-core' / 'axe.min.js'
-
-
-class _QuietHandler(_SimpleHTTPRequestHandler):
+class _QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args, **kwargs):
         pass
 
@@ -581,20 +569,20 @@ def mcp_fixture_site():
     scan_page MCP tests.  scan_page validates http(s) only, so
     tests can't use file:// URIs anymore.
     """
-    handler = _partial(_QuietHandler, directory=str(_FIXTURES))
-    server = _ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    handler = partial(_QuietHandler, directory=str(_FIXTURES))
+    server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
     port = server.server_address[1]
-    thread = _threading.Thread(
+    thread = threading.Thread(
         target=server.serve_forever, daemon=True)
     thread.start()
     try:
         for _ in range(50):
             try:
-                with _socket.create_connection(
+                with socket.create_connection(
                         ('127.0.0.1', port), timeout=0.2):
                     break
             except OSError:
-                _time.sleep(0.05)
+                time.sleep(0.05)
         yield 'http://127.0.0.1:{}'.format(port)
     finally:
         server.shutdown()

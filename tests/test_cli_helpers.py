@@ -1,9 +1,21 @@
 """Tier 1+2: utility helpers exposed by a11y-catscan.py.
 
-The CLI script is loaded via the `cli` fixture (importlib trick — the
-script's filename has a hyphen that prevents normal imports). These
-tests cover the pure helpers and the small bits of file I/O like
-load_allowlist / load_config.
+After the file split, these helpers live in dedicated modules:
+
+  - safe_int, normalize_url, is_same_origin, should_scan,
+    RateLimiter      → crawl_utils
+  - parse_wcag_sc    → engine_mappings
+  - load_allowlist,
+    matches_allowlist → allowlist
+  - load_config      → a11y-catscan.py (still the CLI's own)
+
+The CLI script re-exports them so tests using the `cli` fixture can
+reach them in one place.  Module-level imports below pin the real
+owners — the `cli`-style access in individual tests is convenience
+only.
+
+The CLI script is loaded via the `cli` fixture (importlib trick —
+the script's filename has a hyphen that prevents normal imports).
 """
 
 import os

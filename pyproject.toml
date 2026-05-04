@@ -30,3 +30,27 @@ dev = [
 # `[project.scripts]` entry — the hyphen prevents Python from
 # importing it as a module, and the CLI is meant to run as a
 # self-contained script next to its `node_modules/`.
+
+[tool.coverage.run]
+branch = true
+source = ["."]
+omit = [
+    # Sample auth plugin — exercised at runtime by users who
+    # configure auth, never imported by the test suite.
+    "login-hubzero.py",
+    "tests/*",
+    "tests/fixtures/*",
+    ".venv/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    # Defensive shutdown branches that fire only under
+    # exceptional teardown paths.
+    "except (asyncio.CancelledError, Exception):",
+]

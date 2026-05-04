@@ -139,25 +139,18 @@ class TestSignalHandlers:
     def test_sigusr1_writes_state_snapshot(
             self, tmp_path, fixture_site):
         # SIGUSR1 should write a .state.json snapshot without
-        # stopping the scan.  _save_state returns early when the
-        # queue is empty (single worker can briefly drain it
-        # between pages), so we re-send the signal until the
-        # state file lands or we hit the deadline.
+        # stopping the scan.  _save_state always writes when
+        # invoked (it doesn't bail on an empty queue), so a
+        # single signal is enough — no retry loop needed.
         proc, json_path = self._spawn(tmp_path, fixture_site)
         state_path = json_path.replace('.json', '.state.json')
         try:
-            deadline = time.time() + 20
-            last_signal = 0.0
+            os.kill(proc.pid, signal.SIGUSR1)
+            deadline = time.time() + 10
             while time.time() < deadline:
                 if os.path.isfile(state_path):
                     break
-                if time.time() - last_signal >= 1.0:
-                    try:
-                        os.kill(proc.pid, signal.SIGUSR1)
-                    except ProcessLookupError:
-                        break
-                    last_signal = time.time()
-                time.sleep(0.2)
+                time.sleep(0.1)
             assert os.path.isfile(state_path), (
                 'SIGUSR1 should produce a state snapshot')
             # State file is valid JSON with the expected keys
