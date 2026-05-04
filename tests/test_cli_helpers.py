@@ -103,6 +103,36 @@ class TestNormalizeUrl:
         assert 'sort=' not in out
         assert 'limit=' not in out
 
+    def test_path_conditional_strip_rule(self, cli, monkeypatch):
+        # Path-conditional rules: only strip the param when the
+        # path matches.  Configured via configure_strip_rules
+        # with a list of (compiled-regex, param-set) tuples.
+        import re as _re
+        import crawl_utils
+        monkeypatch.setattr(
+            crawl_utils, '_strip_path_rules_compiled',
+            [(_re.compile(r'/admin/'), {'tab'})])
+        # Path matches → 'tab' is stripped
+        admin = cli.normalize_url(
+            'https://example.test/admin/users?tab=2&keep=1')
+        assert 'keep=1' in admin
+        assert 'tab=' not in admin
+        # Path doesn't match → 'tab' is preserved
+        public = cli.normalize_url(
+            'https://example.test/public/page?tab=2&keep=1')
+        assert 'tab=2' in public
+
+    def test_strip_drains_query_to_empty(self, cli, monkeypatch):
+        # If every query param is configured to be stripped, the
+        # resulting query is empty and the URL has no '?'.
+        import crawl_utils
+        monkeypatch.setattr(
+            crawl_utils, '_strip_params', {'sort', 'limit'})
+        out = cli.normalize_url(
+            'https://example.test/x?sort=a&limit=10')
+        assert '?' not in out
+        assert out == 'https://example.test/x'
+
 
 # ── is_same_origin ─────────────────────────────────────────────
 
@@ -166,6 +196,74 @@ class TestShouldScan:
 
     def test_basic_url_passes(self, cli):
         assert cli.should_scan(self.BASE + 'x', self.BASE, [], [])
+
+
+# ── load_cookies ───────────────────────────────────────────────
+
+class TestLoadCookies:
+    """`load_cookies` should degrade gracefully on every failure
+    mode — missing config, missing file, malformed JSON, or a
+    JSON value that isn't a list.  All of these mean "scan
+    anonymously"; the only way an unauthenticated scan should
+    happen accidentally is if the file genuinely does have no
+    cookies.
+    """
+
+    def test_no_auth_config_returns_empty(self):
+        from crawl_utils import load_cookies
+        assert load_cookies({}) == []
+
+    def test_no_cookies_file_returns_empty(self):
+        from crawl_utils import load_cookies
+        assert load_cookies({'auth': {}}) == []
+        assert load_cookies({'auth': {'cookies_file': ''}}) == []
+
+    def test_missing_cookies_file_returns_empty(self, tmp_path):
+        from crawl_utils import load_cookies
+        path = str(tmp_path / 'nope.json')
+        assert load_cookies(
+            {'auth': {'cookies_file': path}}) == []
+
+    def test_malformed_json_returns_empty(self, tmp_path):
+        from crawl_utils import load_cookies
+        path = tmp_path / 'broken.json'
+        path.write_text('{not json')
+        assert load_cookies(
+            {'auth': {'cookies_file': str(path)}}) == []
+
+    def test_non_list_json_returns_empty(self, tmp_path):
+        # JSON that parses but isn't a list (a dict, a string, a
+        # number) should be treated as "no cookies" rather than
+        # crashing on iteration.
+        from crawl_utils import load_cookies
+        path = tmp_path / 'wrong_shape.json'
+        path.write_text('{"name": "session", "value": "x"}')
+        assert load_cookies(
+            {'auth': {'cookies_file': str(path)}}) == []
+
+    def test_loads_valid_cookie_list(self, tmp_path):
+        from crawl_utils import load_cookies
+        path = tmp_path / 'cookies.json'
+        path.write_text(textwrap.dedent("""\
+            [
+              {"name": "session", "value": "abc123",
+               "domain": "example.test", "path": "/"}
+            ]
+        """))
+        cookies = load_cookies(
+            {'auth': {'cookies_file': str(path)}})
+        assert len(cookies) == 1
+        assert cookies[0]['name'] == 'session'
+
+    def test_expanduser_in_cookies_path(self, tmp_path,
+                                         monkeypatch):
+        # Paths starting with ~ should be expanded via os.path.
+        # expanduser; verify by pointing HOME at tmp_path.
+        from crawl_utils import load_cookies
+        monkeypatch.setenv('HOME', str(tmp_path))
+        (tmp_path / 'creds.json').write_text('[]')
+        assert load_cookies(
+            {'auth': {'cookies_file': '~/creds.json'}}) == []
 
 
 # ── RateLimiter ────────────────────────────────────────────────
@@ -342,3 +440,68 @@ class TestMatchesAllowlist:
         # Wrong URL — no match
         assert not cli.matches_allowlist(
             'sc-1.4.3', 'http://x/public/p', nodes, allowlist)
+
+    def test_engine_filter_with_no_engines_dict(self, cli):
+        # If a rule specifies an engine but the finding has no
+        # engines_dict (raw, pre-dedup), the filter can't be
+        # satisfied — no match.
+        allowlist = [{'rule': 'sc-1.4.3', 'engine': 'axe'}]
+        assert not cli.matches_allowlist(
+            'sc-1.4.3', 'http://x/', [{}], allowlist,
+            engines_dict=None)
+        assert not cli.matches_allowlist(
+            'sc-1.4.3', 'http://x/', [{}], allowlist,
+            engines_dict={})
+
+    def test_target_match_inside_first_of_many_nodes(self, cli):
+        # Target filter matches if ANY node's target contains the
+        # configured substring — not just the first.
+        allowlist = [{'rule': 'sc-1.4.3', 'target': '#footer'}]
+        nodes = [
+            {'target': ['#header']},
+            {'target': ['main #footer .copyright']},
+        ]
+        assert cli.matches_allowlist(
+            'sc-1.4.3', 'http://x/', nodes, allowlist)
+
+    def test_indexed_class_falls_through_unknown_rule_quickly(
+            self, cli):
+        # The Allowlist class indexes by rule_id so an unknown
+        # rule never iterates the entries.  Verify by
+        # instantiating an Allowlist directly with a 100-entry
+        # list — a no-rule lookup must still return False.
+        from allowlist import Allowlist
+        big = [{'rule': f'sc-1.{i}.1'} for i in range(100)]
+        al = Allowlist(big)
+        # No matching rule → False, no scan
+        assert not al.matches('not-a-real-rule', 'http://x/',
+                              [{}])
+        # Matching rule still works
+        assert al.matches('sc-1.50.1', 'http://x/', [{}])
+
+    def test_legacy_list_path_filters_by_rule_id_too(self, cli):
+        # Callers that haven't migrated to Allowlist still pass a
+        # plain list.  matches_allowlist filters those by rule_id
+        # in a fast inner pass, so a 100-entry list with no
+        # matching rule still returns False quickly without
+        # checking secondary filters on every entry.
+        allowlist = [
+            {'rule': f'sc-1.{i}.1', 'url': '/x'}
+            for i in range(100)
+        ]
+        assert not cli.matches_allowlist(
+            'sc-9.9.9', 'http://x/x', [{}], allowlist)
+        assert cli.matches_allowlist(
+            'sc-1.50.1', 'http://x/x', [{}], allowlist)
+
+    def test_non_dict_entry_in_legacy_list_is_skipped(self, cli):
+        # A YAML allowlist could contain a non-dict element
+        # (mistake or ill-formed YAML).  The matcher should skip
+        # it rather than crash on .get('rule').
+        allowlist = [
+            'oops not a dict',
+            None,
+            {'rule': 'sc-1.4.3'},
+        ]
+        assert cli.matches_allowlist(
+            'sc-1.4.3', 'http://x/', [{}], allowlist)

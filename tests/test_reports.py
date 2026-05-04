@@ -211,6 +211,83 @@ class TestGenerateLlmReport:
         # When there are no cantTell entries, the report says so
         assert '## Incompletes: NONE' in text
 
+    def test_incompletes_section_renders_with_unknown_bucket(
+            self, cli, tmp_path, jsonl_factory,
+            make_finding, make_page):
+        # dedup_page strips per-check `data.messageKey`, so all
+        # cantTell findings collapse into one bucket keyed by ''
+        # which renders as '(unknown)'.  Verify the section
+        # header + bucket name + page count appear.
+        ct = make_finding('aria-valid-attrs', EARL_CANTTELL,
+                          engine='axe',
+                          tags=['aria-valid-attrs'],
+                          selector='#nav')
+        page = make_page('https://example.test/home',
+                         cant_tell=[ct])
+        jsonl = jsonl_factory(
+            [('https://example.test/home', page)])
+        out = tmp_path / 'r.md'
+        text = cli.generate_llm_report(
+            jsonl, str(out), 'https://example.test/', config={})
+        assert '## Incompletes (' in text
+        assert '(unknown)' in text
+        assert 'Pages:' in text
+
+    def test_suppressed_section_appears_when_allowlist_filters(
+            self, cli, tmp_path, jsonl_factory,
+            make_finding, make_page):
+        # cantTell findings matching the allowlist increment the
+        # suppressed_count and surface a "## Suppressed
+        # (allowlist): N nodes" line at the bottom.
+        ct = make_finding('aria-valid-attrs', EARL_CANTTELL,
+                          engine='axe',
+                          tags=['aria-valid-attrs'],
+                          selector='#nav')
+        page = make_page('https://example.test/p', cant_tell=[ct])
+        jsonl = jsonl_factory([('https://example.test/p', page)])
+        out = tmp_path / 'r.md'
+        text = cli.generate_llm_report(
+            jsonl, str(out), 'https://example.test/', config={},
+            allowlist=[{'rule': 'aria-valid-attrs'}])
+        assert '## Suppressed (allowlist):' in text
+
+    def test_violation_pages_truncates_at_ten_with_more_marker(
+            self, cli, tmp_path, jsonl_factory,
+            make_finding, make_page):
+        # When a single rule fires on >10 pages, the report
+        # lists 10 and shows "... and N more".
+        records = []
+        for i in range(15):
+            v = make_finding(
+                'image-alt', EARL_FAILED, engine='axe',
+                tags=['sc-1.1.1'], selector=f'#img-{i}')
+            url = f'https://example.test/page-{i}'
+            records.append((url, make_page(url, failed=[v])))
+        jsonl = jsonl_factory(records)
+        out = tmp_path / 'r.md'
+        text = cli.generate_llm_report(
+            jsonl, str(out), 'https://example.test/', config={})
+        assert '## Violations' in text
+        assert '... and 5 more' in text  # 15 - 10 = 5
+
+    def test_incomplete_pages_truncates_at_ten_with_more_marker(
+            self, cli, tmp_path, jsonl_factory,
+            make_finding, make_page):
+        # Same truncation logic for the incompletes section.
+        records = []
+        for i in range(13):
+            ct = make_finding(
+                'aria-valid-attrs', EARL_CANTTELL, engine='axe',
+                tags=['aria-valid-attrs'], selector=f'#x-{i}')
+            url = f'https://example.test/page-{i}'
+            records.append((url, make_page(url, cant_tell=[ct])))
+        jsonl = jsonl_factory(records)
+        out = tmp_path / 'r.md'
+        text = cli.generate_llm_report(
+            jsonl, str(out), 'https://example.test/', config={})
+        assert '## Incompletes' in text
+        assert '... and 3 more' in text  # 13 - 10 = 3
+
 
 # ── CLI diff_scans (the printing variant) ─────────────────────
 

@@ -142,3 +142,76 @@ class TestHttpStatus:
             'http://127.0.0.1:1/never', timeout=1)
         assert status == 0
         assert ct == ''
+
+    def test_get_fallback_when_head_raises_non_http_error(
+            self, cli, monkeypatch):
+        # The GET fallback only fires when HEAD raises a non-
+        # HTTPError exception (e.g. a connection reset or socket
+        # error mid-request).  Mock the opener so HEAD raises and
+        # GET returns a fake response — the contract is that we
+        # see GET's status, not (0, '').
+        import urllib.request
+        import crawl_utils
+
+        class _FakeResp:
+            status = 200
+            headers = {'Content-Type': 'text/html; charset=utf-8'}
+
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        calls = {'count': 0}
+
+        def _open(req, timeout=10):
+            calls['count'] += 1
+            if req.get_method() == 'HEAD':
+                raise OSError('simulated connection reset')
+            return _FakeResp()
+
+        monkeypatch.setattr(
+            crawl_utils._no_redirect_opener, 'open', _open)
+        status, ct = cli.http_status('http://example.test/x')
+        assert status == 200
+        assert ct == 'text/html'
+        # HEAD attempt + GET fallback = 2 calls
+        assert calls['count'] == 2
+
+    def test_get_fallback_returns_zero_when_get_also_fails(
+            self, cli, monkeypatch):
+        # Both HEAD and GET raise non-HTTPError → (0, '').
+        import crawl_utils
+
+        def _open(req, timeout=10):
+            raise OSError('network unreachable')
+
+        monkeypatch.setattr(
+            crawl_utils._no_redirect_opener, 'open', _open)
+        status, ct = cli.http_status('http://example.test/x')
+        assert status == 0
+        assert ct == ''
+
+    def test_get_fallback_surfaces_http_error_status(
+            self, cli, monkeypatch):
+        # GET fallback path returning an HTTPError should surface
+        # the error code rather than (0, '').
+        import urllib.error
+        import crawl_utils
+
+        class _FakeHeaders:
+            def get(self, key, default=''):
+                return ('text/html'
+                        if key.lower() == 'content-type'
+                        else default)
+
+        def _open(req, timeout=10):
+            if req.get_method() == 'HEAD':
+                raise OSError('simulated connection reset')
+            err = urllib.error.HTTPError(
+                req.full_url, 500, 'fail', _FakeHeaders(), None)
+            raise err
+
+        monkeypatch.setattr(
+            crawl_utils._no_redirect_opener, 'open', _open)
+        status, ct = cli.http_status('http://example.test/x')
+        assert status == 500
+        assert ct == 'text/html'
