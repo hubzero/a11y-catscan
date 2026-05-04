@@ -222,11 +222,26 @@ class Scanner:
         self._pw = None
         self._browser = None
         self._context = None  # authenticated BrowserContext or None
-        self._engines = []
         self._login_plugin = None
         self._storage_state_path = os.path.join(
             SCRIPT_DIR, '.auth-state.json')
         self._started = False
+
+        # Engine plugin objects.  Constructed eagerly: engines
+        # don't need a live browser to instantiate (they just hold
+        # config), so creating them here lets `engine_names` be
+        # accurate before start() and lets misconfiguration
+        # (unknown engine name) surface immediately.  start()
+        # later loads each engine's JS source / launches its
+        # subprocess.
+        self._engines = [
+            make_engine(
+                name, self._scan_level,
+                verbose=self.verbose, quiet=self.quiet,
+                tags=self._tags, rules=self._rules,
+                include_best=self._include_best)
+            for name in self._engine_names
+        ]
 
     @property
     def is_started(self) -> bool:
@@ -262,17 +277,8 @@ class Scanner:
         from playwright.async_api import async_playwright
         self._pw = await async_playwright().__aenter__()
 
-        # Instantiate engine objects via the central factory.  Extras
-        # (tags/rules/include_best) get forwarded only to engines that
-        # accept them.
-        self._engines = [
-            make_engine(
-                name, self._scan_level,
-                verbose=self.verbose, quiet=self.quiet,
-                tags=self._tags, rules=self._rules,
-                include_best=self._include_best)
-            for name in self._engine_names
-        ]
+        # Engines were constructed in __init__ — start() launches
+        # their browser-side resources only.
 
         # Collect browser launch args from all engines
         launch_args = ['--disable-dev-shm-usage', '--disable-gpu']

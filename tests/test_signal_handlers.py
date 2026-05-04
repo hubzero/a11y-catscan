@@ -52,7 +52,7 @@ def fixture_site():
     handler = partial(_QuietHandler, directory=str(SITE))
     server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
     port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
     thread.start()
     try:
         for _ in range(50):

@@ -573,7 +573,7 @@ def mcp_fixture_site():
     server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
     port = server.server_address[1]
     thread = threading.Thread(
-        target=server.serve_forever, daemon=True)
+        target=server.serve_forever, args=(0.05,), daemon=True)
     thread.start()
     try:
         for _ in range(50):
@@ -621,23 +621,27 @@ class TestScanPage:
             assert 'selector' in f
 
     async def test_skipped_page_returns_skipped_field(
-            self, mcp_server_module, mcp_fixture_site, tmp_path):
+            self, mcp_server_module, tmp_path):
         # A tiny HTML payload (under the 100-byte threshold) is
         # rejected up front by Scanner — the wrapper preserves the
-        # `skipped` reason in its JSON response.  Drop a tiny file
-        # next to the served fixtures so the fixture HTTP server
-        # can serve it via http://.
-        tiny = _FIXTURES / 'tiny_for_mcp.html'
-        tiny.write_text('<html></html>')
+        # `skipped` reason in its JSON response.  Serve from
+        # tmp_path so we don't pollute the shared fixtures dir
+        # (which would race with parallel test runs).
+        (tmp_path / 'tiny.html').write_text('<html></html>')
+        handler = partial(_QuietHandler, directory=str(tmp_path))
+        server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        thread = threading.Thread(
+            target=server.serve_forever, args=(0.05,), daemon=True)
+        thread.start()
         try:
+            base_url = f'http://127.0.0.1:{server.server_address[1]}'
             out = await mcp_server_module.scan_page(
-                mcp_fixture_site + '/tiny_for_mcp.html',
-                engines='axe')
+                base_url + '/tiny.html', engines='axe')
             data = json.loads(out)
             assert data.get('skipped')
             assert data['clean'] is True
             assert data['failed'] == 0
             assert data['findings'] == []
         finally:
-            if tiny.is_file():
-                tiny.unlink()
+            server.shutdown()
+            server.server_close()

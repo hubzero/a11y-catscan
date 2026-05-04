@@ -378,7 +378,12 @@ class TestScannerSanity:
         assert result.get('skipped'), (
             'Expected skip, got {}'.format(result))
 
-    async def test_engine_names_exposed(self):
-        async with Scanner(
-                engines=['axe'], quiet=True) as scanner:
-            assert 'AxeEngine' in scanner.engine_names
+    def test_engine_names_exposed_without_browser(self):
+        # Engines are constructed in Scanner.__init__ now, so
+        # engine_names is accurate before start() — no Chromium
+        # launch needed for this introspection check.
+        scanner = Scanner(
+            engines=['axe', 'ibm'], quiet=True)
+        assert 'AxeEngine' in scanner.engine_names
+        assert 'IbmEngine' in scanner.engine_names
+        assert not scanner.is_started

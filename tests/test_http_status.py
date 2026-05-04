@@ -84,7 +84,7 @@ class _CannedHandler(BaseHTTPRequestHandler):
 def canned_server():
     server = ThreadingHTTPServer(('127.0.0.1', 0), _CannedHandler)
     port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
     thread.start()
     try:
         for _ in range(50):

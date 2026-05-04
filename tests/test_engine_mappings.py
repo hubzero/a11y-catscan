@@ -12,7 +12,7 @@ from engine_mappings import (
     SC_META, SC_SLUGS, SC_NUM_TO_SLUG,
     sc_level, sc_name, sc_slug, resolve_sc,
     ibm_rule_to_sc, ibm_rule_to_tags, htmlcs_code_to_sc,
-    aria_category, bp_category,
+    aria_category, bp_category, parse_wcag_sc,
     AXE_BP_MAP, IBM_BP_MAP, AXE_ARIA_MAP, IBM_ARIA_MAP,
     BP_CATEGORIES, ARIA_CATEGORIES,
 )
@@ -206,3 +206,55 @@ class TestBpCategory:
             assert cat in valid, '{} -> {}'.format(rule, cat)
         for rule, cat in IBM_BP_MAP.items():
             assert cat in valid
+
+
+# ── parse_wcag_sc ──────────────────────────────────────────────
+
+class TestParseWcagSc:
+    """parse_wcag_sc accepts both the normalized 'sc-X.Y.Z' form
+    and the legacy axe-core 'wcagXYZ' form, returning a set of
+    dotted SC numbers.  Level tags ('wcag2a', 'wcag21aa') are
+    silently dropped — they describe a conformance level, not an
+    SC, and don't fit the 3-tuple shape parse_wcag_sc returns.
+    """
+
+    def test_normalized_sc_prefix(self):
+        assert parse_wcag_sc(['sc-1.4.3']) == {'1.4.3'}
+        assert parse_wcag_sc(['sc-2.4.7', 'sc-1.1.1']) == \
+            {'2.4.7', '1.1.1'}
+
+    def test_legacy_axe_format(self):
+        assert parse_wcag_sc(['wcag143']) == {'1.4.3'}
+        # Multi-digit third component (2.4.10 → wcag2410)
+        assert parse_wcag_sc(['wcag2410']) == {'2.4.10'}
+
+    def test_level_tags_are_dropped(self):
+        # 'wcag2a', 'wcag21aa', 'wcag2aaa' are level tags, not SCs
+        assert parse_wcag_sc(['wcag2a', 'wcag21aa', 'wcag2aaa']) \
+            == set()
+
+    def test_mixed_sources_merge(self):
+        # Both formats present in one finding's tags — both kept
+        scs = parse_wcag_sc(
+            ['sc-1.1.1', 'wcag143', 'best-practice',
+             'aria-naming'])
+        assert scs == {'1.1.1', '1.4.3'}
+
+    def test_malformed_sc_dropped(self):
+        # 'sc-1.4' (only two parts), 'sc-X.Y.Z' (non-digit) and
+        # 'wcag14' (only two digits) all fail the regex and are
+        # silently skipped.
+        assert parse_wcag_sc(
+            ['sc-1.4', 'sc-X.Y.Z', 'wcag14', 'sc-1.4.3']) \
+            == {'1.4.3'}
+
+    def test_empty_returns_empty_set(self):
+        assert parse_wcag_sc([]) == set()
+        assert parse_wcag_sc(['best-practice', 'aria-x']) == set()
+
+    def test_returns_set_not_list(self):
+        # The contract is set semantics — duplicates collapse,
+        # iteration order is irrelevant.
+        out = parse_wcag_sc(['sc-1.4.3', 'sc-1.4.3', 'wcag143'])
+        assert out == {'1.4.3'}
+        assert isinstance(out, set)

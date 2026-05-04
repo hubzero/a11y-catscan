@@ -43,24 +43,50 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         pass
 
 
+def _serve_dir(directory):
+    """Spawn a 127.0.0.1 ThreadingHTTPServer for the given dir.
+
+    Returns (base_url, server, thread).  Caller is responsible for
+    `server.shutdown()` + `server.server_close()`.
+    """
+    handler = partial(_QuietHandler, directory=str(directory))
+    server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    # Wait briefly for the listener to be ready
+    for _ in range(50):
+        try:
+            with socket.create_connection(
+                    ('127.0.0.1', port), timeout=0.2):
+                break
+        except OSError:
+            time.sleep(0.05)
+    return f'http://127.0.0.1:{port}', server, thread
+
+
 @pytest.fixture
 def fixture_site():
     """Start a threaded HTTP server hosting tests/fixtures/site/."""
-    handler = partial(_QuietHandler, directory=str(SITE))
-    server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    base_url, server, _ = _serve_dir(SITE)
     try:
-        # Wait briefly for the listener to be ready
-        for _ in range(50):
-            try:
-                with socket.create_connection(
-                        ('127.0.0.1', port), timeout=0.2):
-                    break
-            except OSError:
-                time.sleep(0.05)
-        yield 'http://127.0.0.1:{}'.format(port)
+        yield base_url
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.fixture
+def tmp_fixture_site(tmp_path):
+    """Start a threaded HTTP server hosting `tmp_path`.
+
+    Use this when a test needs to serve files it generates so the
+    shared tests/fixtures/site/ directory stays untouched (and so
+    parallel runs don't race each other writing into it).
+    """
+    base_url, server, _ = _serve_dir(tmp_path)
+    try:
+        yield base_url
     finally:
         server.shutdown()
         server.server_close()
@@ -335,40 +361,36 @@ class TestCrawlLoop:
 
     def test_main_page_mode_failing_page_exits_one(
             self, cli, monkeypatch, capsys, tmp_path,
-            fixture_site, isolated_registry):
-        # Copy the seeded known-bad fixture into the served directory
-        # so the fixture HTTP server can respond to the request.
+            tmp_fixture_site, isolated_registry):
+        # Serve the seeded known-bad fixture from tmp_path (not the
+        # shared tests/fixtures/site/) so parallel test runs don't
+        # race writing into the repo.
         bad_src = (Path(__file__).resolve().parent
                    / 'fixtures' / 'known_bad.html')
-        bad_in_site = SITE / 'known_bad.html'
-        bad_in_site.write_text(bad_src.read_text())
-        try:
-            monkeypatch.setattr('sys.argv', [
-                'a11y-catscan.py',
-                '--page',
-                '-q',
-                '--summary-json',
-                '--output-dir', str(tmp_path),
-                '--engine', 'axe',
-                fixture_site + '/known_bad.html',
-            ])
-            with pytest.raises(SystemExit) as excinfo:
-                cli.main()
-            # Violations → exit 1
-            assert excinfo.value.code == 1
+        (tmp_path / 'known_bad.html').write_text(bad_src.read_text())
+        monkeypatch.setattr('sys.argv', [
+            'a11y-catscan.py',
+            '--page',
+            '-q',
+            '--summary-json',
+            '--output-dir', str(tmp_path),
+            '--engine', 'axe',
+            tmp_fixture_site + '/known_bad.html',
+        ])
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main()
+        # Violations → exit 1
+        assert excinfo.value.code == 1
 
-            out = capsys.readouterr().out
-            json_lines = [
-                ln for ln in out.splitlines()
-                if ln.startswith('{') and ln.endswith('}')]
-            assert json_lines
-            summary = json.loads(json_lines[-1])
-            assert summary['pages'] == 1
-            assert summary['clean'] is False
-            assert summary['failed'] > 0
-        finally:
-            if bad_in_site.is_file():
-                bad_in_site.unlink()
+        out = capsys.readouterr().out
+        json_lines = [
+            ln for ln in out.splitlines()
+            if ln.startswith('{') and ln.endswith('}')]
+        assert json_lines
+        summary = json.loads(json_lines[-1])
+        assert summary['pages'] == 1
+        assert summary['clean'] is False
+        assert summary['failed'] > 0
 
     def test_multi_worker_crawl_visits_each_page_once(
             self, cli, tmp_path, fixture_site):
@@ -426,3 +448,57 @@ class TestCrawlLoop:
             fixture_site + '/page-a.html',
             fixture_site + '/page-b.html',
         ])
+
+    def test_worker_scan_exception_doesnt_halt_crawl(
+            self, cli, tmp_path, fixture_site, monkeypatch):
+        # If a worker task raises mid-scan the drain handler
+        # should swallow it and the remaining pages should still
+        # complete.  Patches Scanner.scan_page to raise on
+        # /page-a.html only; verifies index.html and page-b.html
+        # land in the JSONL.
+        from scanner import Scanner
+
+        original = Scanner.scan_page
+        target = fixture_site + '/page-a.html'
+
+        async def _flaky(self, url, *args, **kwargs):
+            if url == target:
+                raise RuntimeError('synthetic worker error')
+            return await original(self, url, *args, **kwargs)
+
+        monkeypatch.setattr(Scanner, 'scan_page', _flaky)
+
+        json_path = str(tmp_path / 'scan.json')
+        page_count, jsonl_path, _w, _p, _t = cli.crawl_and_scan(
+            start_url=fixture_site + '/index.html',
+            max_pages=10,
+            level='wcag21aa',
+            quiet=True,
+            verbose=True,  # exercise the verbose-warning branch
+            config={'engine': 'axe', 'niceness': 0,
+                    'oom_score_adj': 0, 'workers': 1},
+            json_path=json_path,
+            save_every=0)
+
+        # index.html scans, page-a.html raises (excluded), page-b.html
+        # scans — final JSONL has 2 lines, page-a.html absent.
+        urls = _read_jsonl_urls(jsonl_path)
+        assert target not in urls
+        assert fixture_site + '/index.html' in urls
+        assert fixture_site + '/page-b.html' in urls
+
+    def test_unknown_level_exits_with_error(
+            self, cli, tmp_path):
+        # A bogus level name should print an ERROR and sys.exit(1)
+        # before any browser is launched — covers the early
+        # validation in crawl_and_scan.  No fixture_site needed.
+        with pytest.raises(SystemExit) as excinfo:
+            cli.crawl_and_scan(
+                start_url='https://example.test/',
+                level='wcag99zz',  # not in WCAG_LEVELS
+                quiet=True,
+                config={'engine': 'axe', 'niceness': 0,
+                        'oom_score_adj': 0, 'workers': 1},
+                json_path=str(tmp_path / 'scan.json'),
+                save_every=0)
+        assert excinfo.value.code == 1
