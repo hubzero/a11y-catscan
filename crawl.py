@@ -508,15 +508,28 @@ def crawl_and_scan(
                         print("  redirect: {} → {}".format(
                             url, actual))
 
-                # Session check (triggers recovery if lost)
-                # Scanner exposes check_session but we need
-                # a page to check — do it via a quick test
-                # only if we have auth configured.
-                # Note: Scanner already checked during scan.
-                # For mid-scan expiry, we rely on the login
-                # plugin's is_logged_in check which Scanner
-                # doesn't call (crawl-level concern).
-                # TODO: expose session check in Scanner results
+                # Session-expiry detection.  Scanner.scan_page
+                # surfaces `session_active=False` when the login
+                # plugin reports we've been logged out mid-scan
+                # (typical: a stale cookie, a hidden logout link,
+                # or a session timeout).  Discard the (now-junk)
+                # result, mark the URL suspect, and trigger
+                # recovery — the main loop will drain workers,
+                # re-login, and either ban the URL as a logout
+                # trap or requeue it for a real post-relogin
+                # scan.  Absent `session_active` means no auth
+                # is configured (or the plugin lacks
+                # is_logged_in) — treat as alive.
+                if result.get('session_active') is False:
+                    if not quiet:
+                        print(
+                            "  [session lost on {} — entering "
+                            "recovery]".format(url))
+                    if url not in _suspect_urls:
+                        _suspect_urls.append(url)
+                    _recovery_done.clear()
+                    _recovery_mode.set()
+                    return None
 
                 new_links = [
                     normalize_url(lnk)
@@ -731,41 +744,72 @@ def crawl_and_scan(
                     else:
                         page_count -= 1
 
-                # Recovery mode: drain all workers, re-login,
-                # test suspect URLs serially, then resume.
+                # Recovery mode: drain all in-flight workers,
+                # re-login, then test each suspect URL.  A URL
+                # whose scan triggers another logout is the
+                # logout trap itself — ban it via _logout_urls
+                # so it's never visited again.  URLs that scan
+                # cleanly post-relogin get requeued for a fresh
+                # normal scan (their original result was
+                # discarded as junk).
                 if (_recovery_mode.is_set()
                         and scanner.context):
                     await _drain_pending()
                     active_wids.clear()
 
+                    suspects_before = len(_suspect_urls)
+                    bans_before = len(_logout_urls)
                     if not quiet:
                         print(
                             "  [recovery: {} suspect URLs, "
                             "re-logging in]".format(
-                                len(_suspect_urls)))
+                                suspects_before))
 
-                    # Re-login via Scanner
-                    ctx, _ = await scanner.relogin('recovery')
+                    ctx, ok = await scanner.relogin('recovery')
+                    if not ok:
+                        # Re-login failed — ban every suspect so
+                        # we don't loop, clear recovery, and let
+                        # the crawl continue (likely toward exit
+                        # since there's nothing to scan).
+                        if not quiet:
+                            print(
+                                "  [recovery: relogin failed, "
+                                "banning {} suspects]".format(
+                                    suspects_before))
+                        _logout_urls.update(_suspect_urls)
+                        _suspect_urls.clear()
+                        _recovery_mode.clear()
+                        _recovery_done.set()
+                        continue
 
-                    # Test each suspect URL serially
-                    safe_urls = []
+                    # Test each suspect URL serially.
+                    requeue_count = 0
                     for surl in list(_suspect_urls):
+                        if surl in _logout_urls:
+                            continue
                         result = await scanner.scan_page(
                             surl, dedup=False)
-                        if result.get('skipped'):
-                            safe_urls.append(surl)
-                        else:
-                            # Check session after scanning
-                            # If page loaded without skipping,
-                            # assume session is OK. If the page
-                            # triggered a logout, the next scan
-                            # will detect it.
-                            safe_urls.append(surl)
-
-                    # Requeue safe URLs
-                    for surl in safe_urls:
-                        if surl not in visited:
+                        if result.get('session_active') is False:
+                            # The URL itself is the logout
+                            # trigger.  Ban it and re-login
+                            # again before testing the rest.
+                            _logout_urls.add(surl)
+                            if not quiet:
+                                print(
+                                    "  [banned logout trigger: "
+                                    "{}]".format(surl))
+                            ctx, ok = await scanner.relogin(
+                                'post-suspect-test')
+                            if not ok:
+                                _logout_urls.update(_suspect_urls)
+                                break
+                        elif not result.get('skipped'):
+                            # Session survived the rescan —
+                            # requeue at the front for a real
+                            # scan via the normal sliding window.
+                            visited.discard(surl)
                             queue.appendleft(surl)
+                            requeue_count += 1
                     _suspect_urls.clear()
 
                     _recovery_mode.clear()
@@ -773,10 +817,10 @@ def crawl_and_scan(
 
                     if not quiet:
                         print(
-                            "  [recovery done: {} banned, "
+                            "  [recovery done: +{} banned, "
                             "{} requeued]".format(
-                                len(_logout_urls),
-                                len(safe_urls)))
+                                len(_logout_urls) - bans_before,
+                                requeue_count))
 
                 # Fill empty slots with freed worker IDs first,
                 # then allocate new ones if needed.

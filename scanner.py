@@ -413,8 +413,30 @@ class Scanner:
                 ignore_https_errors=self._ignore_certs)
 
         try:
-            return await self._scan_page_impl(
+            result = await self._scan_page_impl(
                 page, url, extract_links, dedup, t0)
+            # If a login plugin is configured, surface the
+            # session state so the crawl loop can detect a
+            # mid-scan logout and enter recovery mode.  Plugins
+            # without is_logged_in (or scans without auth)
+            # default to True via check_session.  We only set
+            # the field when a plugin is present so absence
+            # means "auth not configured" rather than "alive".
+            if self._login_plugin and not result.get('skipped'):
+                try:
+                    result['session_active'] = (
+                        await self.check_session(page))
+                except Exception as e:
+                    # check_session itself raised — be
+                    # conservative and assume the session is
+                    # still alive rather than triggering a
+                    # spurious recovery cycle on every page.
+                    if self.verbose:
+                        print(
+                            f"  WARNING: check_session raised "
+                            f"on {url}: {e}",
+                            file=sys.stderr)
+            return result
         except Exception as e:
             return self._skip_result(
                 url, f'error: {e}', t0)
@@ -501,7 +523,13 @@ class Scanner:
         return True
 
     async def relogin(self, reason: str = '') -> tuple:
-        """Re-run the login flow.  Returns (context, success)."""
+        """Re-run the login flow.  Returns (context, success).
+
+        On success, also installs the new context on self so
+        subsequent `scan_page` calls use it — otherwise scan_page
+        keeps trying to open pages on the just-closed context and
+        raises 'context has been closed'.
+        """
         if self._context:
             try:
                 await self._context.close()
@@ -511,7 +539,14 @@ class Scanner:
                         "  WARNING: context close failed before "
                         "relogin: {}".format(e),
                         file=sys.stderr)
-        return await self._do_login(reason)
+            # Drop the reference even on close-failure so the
+            # next scan falls back to the bare browser rather
+            # than dereferencing a closed context.
+            self._context = None
+        ctx, success = await self._do_login(reason)
+        if success:
+            self._context = ctx
+        return ctx, success
 
     async def __aenter__(self):
         await self.start()

@@ -502,3 +502,59 @@ class TestCrawlLoop:
                 json_path=str(tmp_path / 'scan.json'),
                 save_every=0)
         assert excinfo.value.code == 1
+
+    def test_session_recovery_bans_logout_trap(
+            self, cli, tmp_path, fixture_site, monkeypatch):
+        # End-to-end exercise of the recovery cycle.  The
+        # session_expiry_plugin treats /page-a.html as a logout
+        # trap — every visit to it makes is_logged_in return
+        # False.  The crawl should:
+        #   1. Scan index.html (session OK)
+        #   2. Scan page-a.html, detect logout, mark suspect,
+        #      enter recovery
+        #   3. Drain workers, re-login
+        #   4. Re-test page-a.html: still triggers logout → ban
+        #   5. Re-login again, exit recovery
+        #   6. Resume crawl, scan page-b.html successfully
+        # Final JSONL has index + page-b but NOT page-a.
+        plugin_path = str(
+            Path(__file__).resolve().parent
+            / 'fixtures' / 'session_expiry_plugin.py')
+        monkeypatch.setenv('A11Y_TEST_LOGOUT_TRAPS', 'page-a')
+        # Reset plugin call counts (the module is imported under
+        # a fresh name by Scanner._setup_auth so the counters in
+        # session_expiry_plugin.calls won't actually match the
+        # plugin instance loaded by Scanner — verifying side-
+        # effects via the JSONL output is what matters).
+        from tests.fixtures import session_expiry_plugin
+        session_expiry_plugin.reset()
+
+        json_path = str(tmp_path / 'scan.json')
+        page_count, jsonl_path, _w, _p, _t = cli.crawl_and_scan(
+            start_url=fixture_site + '/index.html',
+            max_pages=10,
+            level='wcag21aa',
+            quiet=True,
+            verbose=True,
+            config={
+                'engine': 'axe', 'niceness': 0,
+                'oom_score_adj': 0, 'workers': 1,
+                'auth': {'login_script': plugin_path},
+            },
+            json_path=json_path,
+            save_every=0)
+
+        # Final JSONL should contain index + page-b, NOT page-a
+        # (which got banned as a logout trap).
+        urls = _read_jsonl_urls(jsonl_path)
+        assert fixture_site + '/page-a.html' not in urls
+        assert fixture_site + '/index.html' in urls
+        assert fixture_site + '/page-b.html' in urls
+
+        # State file should record page-a as a banned logout URL.
+        state_path = json_path.replace('.json', '.state.json')
+        if os.path.isfile(state_path):
+            with open(state_path) as f:
+                state = json.load(f)
+            assert any('page-a' in u
+                       for u in state.get('logout_urls', []))
