@@ -558,3 +558,78 @@ class TestCrawlLoop:
                 state = json.load(f)
             assert any('page-a' in u
                        for u in state.get('logout_urls', []))
+
+    def test_recovery_circuit_breaker_on_relogin_failure(
+            self, cli, tmp_path, fixture_site, monkeypatch,
+            capsys):
+        # If re-login fails inside recovery, the breaker disables
+        # further recovery attempts for the rest of the run —
+        # otherwise every subsequent page would re-trigger
+        # recovery, which would re-fail relogin, and the crawl
+        # would never exit.  Configure the plugin so:
+        #   - /page-a.html is a logout trap (kills session)
+        #   - The first login() (initial) succeeds
+        #   - The second login() (the recovery relogin) fails
+        # Expected behavior: page-a triggers recovery, relogin
+        # fails, breaker fires, suspect URLs banned, scan
+        # continues without further recovery and exits.
+        plugin_path = str(
+            Path(__file__).resolve().parent
+            / 'fixtures' / 'session_expiry_plugin.py')
+        monkeypatch.setenv('A11Y_TEST_LOGOUT_TRAPS', 'page-a')
+        monkeypatch.setenv('A11Y_TEST_LOGIN_FAILS_AFTER', '1')
+        from tests.fixtures import session_expiry_plugin
+        session_expiry_plugin.reset()
+
+        json_path = str(tmp_path / 'scan.json')
+        # The crawl must terminate within a reasonable time —
+        # if the breaker is broken, this test will hang until
+        # pytest times out.
+        page_count, jsonl_path, _w, _p, _t = cli.crawl_and_scan(
+            start_url=fixture_site + '/index.html',
+            max_pages=10,
+            level='wcag21aa',
+            quiet=True,
+            config={
+                'engine': 'axe', 'niceness': 0,
+                'oom_score_adj': 0, 'workers': 1,
+                'auth': {'login_script': plugin_path},
+            },
+            json_path=json_path,
+            save_every=0)
+
+        # Crawl exited (didn't loop).  page-a was banned.
+        urls = _read_jsonl_urls(jsonl_path)
+        assert fixture_site + '/page-a.html' not in urls
+
+    def test_check_session_exception_surfaces_warning(
+            self, cli, tmp_path, fixture_site, monkeypatch,
+            capsys):
+        # If is_logged_in() raises, Scanner should surface a
+        # WARNING to stderr (always, not just under verbose) so
+        # a plugin bug doesn't silently disable session
+        # detection across the whole scan.
+        plugin_path = str(
+            Path(__file__).resolve().parent
+            / 'fixtures' / 'session_expiry_plugin.py')
+        monkeypatch.setenv('A11Y_TEST_IS_LOGGED_IN_RAISES', '1')
+        from tests.fixtures import session_expiry_plugin
+        session_expiry_plugin.reset()
+
+        json_path = str(tmp_path / 'scan.json')
+        cli.crawl_and_scan(
+            start_url=fixture_site + '/index.html',
+            max_pages=2,
+            level='wcag21aa',
+            quiet=True,
+            config={
+                'engine': 'axe', 'niceness': 0,
+                'oom_score_adj': 0, 'workers': 1,
+                'auth': {'login_script': plugin_path},
+            },
+            json_path=json_path,
+            save_every=0)
+
+        err = capsys.readouterr().err
+        assert 'check_session raised' in err
+        assert 'simulated is_logged_in failure' in err

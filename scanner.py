@@ -428,14 +428,16 @@ class Scanner:
                         await self.check_session(page))
                 except Exception as e:
                     # check_session itself raised — be
-                    # conservative and assume the session is
-                    # still alive rather than triggering a
-                    # spurious recovery cycle on every page.
-                    if self.verbose:
-                        print(
-                            f"  WARNING: check_session raised "
-                            f"on {url}: {e}",
-                            file=sys.stderr)
+                    # conservative on the field (treat as alive,
+                    # don't trigger spurious recovery) but always
+                    # surface the cause.  A plugin bug here would
+                    # otherwise silently disable session
+                    # detection across the whole scan, letting
+                    # logout-page results land in the JSONL.
+                    print(
+                        f"  WARNING: check_session raised on "
+                        f"{url}: {e}",
+                        file=sys.stderr)
             return result
         except Exception as e:
             return self._skip_result(

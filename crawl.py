@@ -203,6 +203,14 @@ def crawl_and_scan(
     # have to re-iterate the JSONL just to compute the summary.
     running_totals = RunningTotals()
 
+    # Recovery circuit breaker.  If re-login fails inside the
+    # recovery cycle, set this flag so workers stop reporting
+    # session_active=False — without it, every subsequent page
+    # would re-trigger recovery, which would re-fail relogin,
+    # which would loop forever.  Wrapped in a list so the
+    # nonlocal-by-mutation pattern works for the closure.
+    _recovery_disabled = [False]
+
     # MEMORY STRATEGY: Stream results to a JSONL file (one JSON
     # object per line) instead of accumulating everything in a
     # Python dict.  Without this, a 5000-page scan would hold
@@ -519,8 +527,13 @@ def crawl_and_scan(
                 # trap or requeue it for a real post-relogin
                 # scan.  Absent `session_active` means no auth
                 # is configured (or the plugin lacks
-                # is_logged_in) — treat as alive.
-                if result.get('session_active') is False:
+                # is_logged_in) — treat as alive.  If recovery
+                # has already failed once this run, don't trigger
+                # again: re-login is broken, the circuit-breaker
+                # lets the rest of the crawl finish writing
+                # whatever it can.
+                if (result.get('session_active') is False
+                        and not _recovery_disabled[0]):
                     if not quiet:
                         print(
                             "  [session lost on {} — entering "
@@ -767,17 +780,26 @@ def crawl_and_scan(
 
                     ctx, ok = await scanner.relogin('recovery')
                     if not ok:
-                        # Re-login failed — ban every suspect so
-                        # we don't loop, clear recovery, and let
-                        # the crawl continue (likely toward exit
-                        # since there's nothing to scan).
+                        # Re-login failed — ban every suspect,
+                        # disable further recovery (circuit
+                        # breaker), and let the crawl continue.
+                        # Without the breaker every subsequent
+                        # page would retrigger recovery, which
+                        # would re-fail relogin, which would
+                        # loop forever.  The remaining scan
+                        # writes whatever it can; logout pages
+                        # will land in the JSONL instead of
+                        # real content but at least the crawl
+                        # exits.
                         if not quiet:
                             print(
-                                "  [recovery: relogin failed, "
-                                "banning {} suspects]".format(
+                                "  [recovery: relogin failed — "
+                                "banning {} suspects, disabling "
+                                "further recovery]".format(
                                     suspects_before))
                         _logout_urls.update(_suspect_urls)
                         _suspect_urls.clear()
+                        _recovery_disabled[0] = True
                         _recovery_mode.clear()
                         _recovery_done.set()
                         continue
