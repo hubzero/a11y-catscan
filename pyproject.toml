@@ -31,6 +31,25 @@ dev = [
 # importing it as a module, and the CLI is meant to run as a
 # self-contained script next to its `node_modules/`.
 
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Explicit package + module list so setuptools auto-discovery
+# doesn't trip on node_modules/, tests/, docs/, etc.  The CLI
+# expects to run from the source tree (`./a11y-catscan.py`),
+# so `pip install -e .` exists for the test suite + dev deps,
+# not for end-user installation.
+packages = ["engines"]
+py-modules = [
+    "scanner", "crawl", "crawl_utils", "results",
+    "report_io", "report_html", "report_llm",
+    "report_group", "report_diff",
+    "registry", "mcp_server", "engine_mappings",
+    "allowlist", "cli_modes",
+]
+
 [tool.coverage.run]
 branch = true
 source = ["."]
